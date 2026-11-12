@@ -379,6 +379,30 @@ def find_files(data_dir):
     return out
 
 
+def has_files(data_dir):
+    """Whether a folder contains recognised well files, without reading their contents."""
+    return any(find_files(data_dir).values())
+
+
+def guess_folder(data_dir):
+    """Find well data inside the selection or in a named neighbouring folder.
+
+    Seismic is often selected as challenge/stack while the wells live in
+    challenge/well_data. Never suggest a seismic-only folder as the well input.
+    """
+    if not data_dir:
+        return ""
+    p = Path(data_dir).expanduser()
+    if not p.is_dir():
+        return ""
+    names = ("well_data", "wells", "well")
+    candidates = [p / name for name in names] + [p] + [p.parent / name for name in names]
+    for candidate in dict.fromkeys(candidates):
+        if candidate.is_dir() and has_files(candidate):
+            return str(candidate)
+    return ""
+
+
 def _file_key(p):
     s = re.sub(r"(?i)[_\- ]?(deviation|checkshot|survey|traj\w*|composite\w*|interp\w*)", "", Path(p).stem)
     return norm(s)
@@ -428,6 +452,9 @@ def load_wells(data_dir, ref=None, log=print):
         names.setdefault(key(p), p.stem.split("_")[0])
     for k, rec in wl.items():
         names.setdefault(k, rec["name"])
+    if not names and any(found.values()):
+        raise ValueError("Well files were found, but no well names could be read. "
+                         + "; ".join(notes))
 
     # 1. positions + paths
     wells = {}

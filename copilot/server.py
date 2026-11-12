@@ -135,7 +135,7 @@ def browse(path: str = ""):
         pass
     segy = [str(q) for q in pipeline.find_segy(p)][:200] if p.exists() else []
     n_las = sum(1 for _ in p.rglob("*.las")) if p.exists() else 0
-    guess = next((str(c) for c in (p / "well_data", p / "wells", p / "well") if c.is_dir()), str(p))
+    guess = wells.guess_folder(p)
     return {"path": str(p), "parent": str(p.parent), "dirs": dirs, "files": files, "segy_found": len(segy), "las_found": n_las,
             "wells_guess": guess}
 
@@ -157,8 +157,16 @@ def wells_scan(path: str = ""):
 async def do_import(req: Request):
     body = await req.json()
     wp = (body.get("wells_path") or "").strip()
-    if wp and not Path(wp).is_dir():
-        raise HTTPException(400, "The well data folder does not exist on this machine.")
+    if body.get("wells_only") and not wp:
+        raise HTTPException(400, "Choose the folder containing the well files first.")
+    if wp:
+        wp = str(Path(wp).expanduser())
+        if not Path(wp).is_dir():
+            raise HTTPException(400, "The well data folder does not exist on this machine.")
+        if not wells.has_files(wp):
+            guess = wells.guess_folder(wp)
+            hint = f" Try {guess}." if guess else " Choose the folder containing LAS logs, deviation surveys, checkshots or the well list."
+            raise HTTPException(400, "No well files found in the selected well folder." + hint)
     if body.get("wells_only"):                       # change the wells without touching the seismic selection
         proj = pipeline.set_project(wells_dir=wp)
         return {"ok": True, "segy": [Path(s).name for s in proj.get("sources", [])], "data_dir": proj.get("data_dir"),

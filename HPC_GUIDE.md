@@ -74,8 +74,8 @@ Use that same value for setup, the image probe, the pipeline and the monitor. Th
 
 ### Updating to this version
 
-Do this once if the app is already installed on the HPC. This version uses the same requirements
-as the preceding repository revision. Run `bash setup.sh` if the environment is missing or incomplete.
+Routine code updates reuse your saved workspace. This well-folder fix requires no new packages and
+no seismic reinterpretation. Run `bash setup.sh` only if the environment is missing or incomplete.
 
 1. Let any active interpretation finish, then stop the app with **Ctrl+C** in its terminal.
 2. **On the HPC**, in that terminal:
@@ -102,29 +102,30 @@ git log -1 --oneline
    If Git reports divergent history, stop and review the local commits. Do not reset or overwrite them.
    A saved stash can be reviewed later with `git stash show -p`; reapply it only after reviewing compatibility.
 
-3. **Check that Gemma can read the app's pictures** (about one minute, sends only made-up test pictures):
+3. For interface or import-selection changes, start the app with `bash start.sh` and refresh Firefox.
+   Keep the same `COPILOT_WORKSPACE` value as the existing interpretation. `git pull` and startup
+   preserve converted seismic, RGT, facies, horizons and other saved results.
+
+**Repair the previously selected seismic-only well folder.** With the app stopped, use:
 
 ```bash
-.venv/bin/python scripts/gemma_probe.py
+.venv/bin/python -u -m copilot.pipeline \
+  --wells /data/epic20/APGCE/input_data/challenge1_challenge2/well_data \
+  --force --stages wells,calibrate,leads,knowledge,dossier
+bash start.sh
 ```
 
-   Every line should say `[OK]`. If some say `[--]`, the app still works: it will rely on its own choices
-   for those parts and say so. Send me what it printed.
-4. Start the app as usual with `bash start.sh` (add your `COPILOT_WORKSPACE=...` in front if you used one).
-5. In the page click **Import data**, check that both folders are right (seismic, and wells), click
-   **Use these folders**, then **Re-run interpretation**. The converted volumes are kept, so this is much
-   faster than the first run.
+This saves the correct well-folder selection and rebuilds wells, well ties/calibration, leads and evidence.
+It keeps converted seismic, the interpretation grid, RGT, facies, horizons and fault/coherence cubes.
+Use your actual well folder if it differs. The import dialog now finds a neighbouring `well_data/`
+folder when browsing `stack/`, and rejects a selected well folder containing no recognised well files.
+An invalid saved well path or reader failure stops the well stage with an error, rather than reporting
+successful completion with zero wells. The well counter refreshes after the well stage.
 
-**Quicker repair, without a GPU job.** If you only want the new parts on top of the run you already have
-(same horizons from RGT-Est, now flat at the survey edge), stop the app with Ctrl+C and type this instead of
-step 5, then start the app again:
-
-```bash
-.venv/bin/python -u -m copilot.pipeline --force --stages wells,horizons,faults,calibrate,leads,knowledge,ai,dossier
-```
-
-Put the same `COPILOT_WORKSPACE=...` in front if you used one. A full re-run is still better once, because it
-also gives RGT-Est the repaired edge traces.
+For later well-data changes, **Import data → Update wells only** performs the same partial refresh.
+Avoid **Re-run interpretation** for routine code updates: that action explicitly clears interpretation
+outputs. Changes to seismic algorithms, input volumes or grid settings can require recalculating the
+affected stages and their dependent results; cached files do not automatically track code changes.
 
 ### Watching progress and debugging
 

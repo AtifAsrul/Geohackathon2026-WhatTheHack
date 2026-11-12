@@ -486,7 +486,7 @@ async function pollStatus() {
     if (s.stage !== lastStage) {
       lastStage = s.stage; const st = await getJSON("/api/state");
       // new volumes are shown as they arrive, and the app becomes usable as soon as the briefing exists
-      if (st.volumes.length !== nvol || (st.interp && st.interp.ready && !S.interp.ready)) {
+      if (st.volumes.length !== nvol || (st.wells || []).length !== S.wells.length || (st.interp && st.interp.ready && !S.interp.ready)) {
         const first = st.interp && st.interp.ready && !S.interp.ready; polling = false; nvol = st.volumes.length; await loadState();
         if (first) addBot("The measured interpretation is ready, so you can start asking questions now. I am still doing my own pass over the pictures (horizons, fault sticks, time slices); those results are added when it finishes.", true);
         return;
@@ -503,7 +503,7 @@ async function scanWells() {
 async function browse(path) {
   const b = await getJSON("/api/browse?path=" + encodeURIComponent(path || ""));
   $("imp-path").value = b.path;
-  if (!browse.wellsEdited) { $("imp-wells").value = b.wells_guess || b.path; scanWells(); }
+  if (!browse.wellsEdited) { $("imp-wells").value = b.wells_guess || ""; scanWells(); }
   $("imp-list").innerHTML = `<div class="dir" data-p="${esc(b.parent)}">⬑ up one level</div>` + b.dirs.map((d) => `<div class="dir" data-p="${esc(b.path + "/" + d)}">📁 ${esc(d)}</div>`).join("") + b.files.map((f) => `<div class="file">${esc(f.name)} <span style="float:right">${f.mb} MB</span></div>`).join("");
   $("imp-found").textContent = b.segy_found ? `Found in this folder: ${b.segy_found} SEG-Y volume(s) and ${b.las_found} well log file(s).` : "No SEG-Y files in this folder yet - open the folder that contains them.";
   $("imp-use").disabled = !b.segy_found;

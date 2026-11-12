@@ -70,16 +70,22 @@ def stage_convert(force=False):
 def stage_wells(force=False):
     from . import wells
     proj = read_json(PROJECT, {})
-    d = proj.get("wells_dir") or proj.get("data_dir")
+    explicit = proj.get("wells_dir")
+    d = explicit or wells.guess_folder(proj.get("data_dir"))
     if not d or not Path(d).exists():
+        if explicit:
+            raise RuntimeError(f"The selected well folder does not exist: {d}. Choose the well data folder again.")
         log("No well folder given - continuing without wells")
         write_json(wells.WELLS_JSON, {"wells": [], "notes": ["no well data folder"]})
         return
+    if not wells.has_files(d):
+        guess = wells.guess_folder(d)
+        hint = f" Use --wells {guess}." if guess else " Choose the folder containing the well files."
+        raise RuntimeError(f"No well files found in {d}." + hint)
     try:
         wells.load_wells(d, store.reference_volume(), log=log)
     except Exception as e:
-        log(f"!! wells could not be read: {type(e).__name__}: {e}")
-        write_json(wells.WELLS_JSON, {"wells": [], "notes": [f"well data could not be read: {e}"]})
+        raise RuntimeError(f"Well data could not be read from {d}: {type(e).__name__}: {e}") from e
 
 
 def stage_grid(force=False):
