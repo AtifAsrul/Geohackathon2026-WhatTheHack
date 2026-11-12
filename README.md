@@ -69,6 +69,12 @@ In the page: **Import data** → **Run interpretation** → ask. A plain-languag
 
 Without the page: `.venv/bin/python -m copilot.pipeline --data /path/to/data`.
 
+Setup/start now show terminal stage bars, elapsed-time heartbeats and local log output.
+To watch an existing run without restarting it: `.venv/bin/python -u scripts/terminal.py watch`.
+The monitor reads only this app's status and logs; it does not change Slurm jobs or system settings.
+See [Watching progress and debugging](HPC_GUIDE.md#watching-progress-and-debugging) for log paths
+and update commands. Stage bars describe step order, not estimated time remaining.
+
 Try it without real data: `python tests/make_synthetic.py demo_data`, then import `demo_data`.
 
 ## Layout

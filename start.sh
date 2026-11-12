@@ -7,4 +7,11 @@ if [ ! -x .venv/bin/python ]; then
   exit 1
 fi
 export COPILOT_OPEN_BROWSER=1
-exec .venv/bin/python -m copilot.server
+export PYTHONUNBUFFERED=1
+LOGDIR="${COPILOT_WORKSPACE:-$PWD/workspace}/logs"
+mkdir -p "$LOGDIR" || exit 1
+exec > >(tee -a "$LOGDIR/server.log") 2>&1
+echo "Terminal progress and local pipeline/GPU/conversion logs will appear below."
+echo "Server log: $LOGDIR/server.log"
+echo "Bars show stage position, not estimated time remaining."
+exec .venv/bin/python -u scripts/terminal.py run --label "App server" --workspace "${COPILOT_WORKSPACE:-$PWD/workspace}" -- .venv/bin/python -u -m copilot.server

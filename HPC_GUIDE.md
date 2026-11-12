@@ -60,6 +60,64 @@ bash start.sh
 Firefox opens by itself. If it does not, open Firefox and type `http://127.0.0.1:8050` in the address bar.
 Keep the terminal window open while you use the app.
 
+### Watching progress and debugging
+
+`bash setup.sh` now shows a six-step bar, pip download/install output, measured RGT download
+progress, and a heartbeat every 15 seconds while a command is running. Each command reports its
+elapsed time and exit code. Optional failures are marked `[WARNING]`; a required package install
+failure stops setup. The self-check's `[--]` lines still identify unavailable components.
+
+`bash start.sh` also shows interpretation stage position, live pipeline/conversion/GPU log output,
+and elapsed-time heartbeats in the same terminal when you click **Run interpretation** in the browser.
+Stage bars show order through the steps, **not percentage of total run time**. Some steps take much
+longer than others, and a quiet heartbeat confirms the command is still running, not that it is
+making measurable progress. The status age helps identify stale updates. Existing fallback methods
+and Slurm settings are unchanged.
+
+To attach a read-only monitor in a **second HPC terminal**, without restarting an existing app:
+
+```bash
+cd /data/epic20/APGCE/$USER/exploration-copilot
+.venv/bin/python -u scripts/terminal.py watch
+```
+
+Press **Ctrl+C** in this second terminal to stop only the monitor. It reads this app's existing files;
+it does not start/cancel jobs, query system resources, install anything, or modify data. It starts
+following logs from their current ends. If `COPILOT_WORKSPACE` was set for your app, use the same
+setting here (or pass `--workspace /your/app/workspace`).
+
+Logs remain inside `workspace/logs/` (or your configured workspace):
+
+* `setup.log`: append-only setup output, including failures.
+* `server.log`: append-only server output and terminal monitoring from `bash start.sh`.
+* `pipeline.log`: current interpretation output.
+* `sdip_*.log`: live converter output, available before a conversion finishes.
+* `gpu_job_*.log`: Slurm worker output, once the GPU job starts.
+
+For plain log output in a second terminal:
+
+```bash
+tail -n 60 -F workspace/logs/pipeline.log
+```
+
+All monitoring is local to this app, uses Python's standard library, and adds no system services,
+administrator commands, or external reporting. Logs may contain local paths and diagnostics;
+review them before sharing them.
+
+### Pulling this monitoring update
+
+Inside your existing HPC checkout (do not run the installer again just to get monitoring):
+
+```bash
+cd /data/epic20/APGCE/$USER/exploration-copilot
+git pull --ff-only origin main
+```
+
+For an app that is already running, use the second-terminal monitor above immediately. It leaves
+the existing run alone. The updated start script and live converter logging take effect on the next
+app/pipeline launch. If setup is not yet complete, run `bash setup.sh` after pulling; otherwise use
+`bash start.sh` the next time you launch the app.
+
 ---
 
 ## Part D — First run (once — do this well before the judging)

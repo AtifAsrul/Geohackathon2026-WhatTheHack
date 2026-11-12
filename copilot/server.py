@@ -147,7 +147,7 @@ async def run(req: Request):
         return {"ok": False, "msg": "A run is already in progress."}
     if not read_json(pipeline.PROJECT, {}).get("sources"):
         raise HTTPException(400, "Import a data folder first.")
-    cmd = [sys.executable, "-m", "copilot.pipeline"]
+    cmd = [sys.executable, "-u", "-m", "copilot.pipeline"]
     if body.get("force"):
         cmd.append("--force")
     if body.get("no_slurm"):

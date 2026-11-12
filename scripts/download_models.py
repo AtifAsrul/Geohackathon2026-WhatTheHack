@@ -9,6 +9,7 @@ Safe to run again: files that are already complete are skipped.
 """
 import os
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -32,14 +33,22 @@ def get_rgt():
         req = urllib.request.Request(RGT_URL, headers={"User-Agent": "python-urllib"})
         with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
             done = 0
+            started = last = time.monotonic()
             while True:
                 chunk = r.read(1 << 20)
                 if not chunk:
                     break
                 f.write(chunk)
                 done += len(chunk)
-                if done % (20 << 20) < (1 << 20):
-                    print(f"   {done / 1e6:.0f} MB", flush=True)
+                now = time.monotonic()
+                if now - last >= 2 or done >= RGT_SIZE:
+                    fraction = min(done / RGT_SIZE, 1)
+                    filled = int(fraction * 20)
+                    rate = done / max(now - started, 0.001)
+                    eta = max(0, RGT_SIZE - done) / max(rate, 1)
+                    print(f"   [{'#' * filled}{'-' * (20 - filled)}] {fraction:.0%} | "
+                          f"{done / 1e6:.1f}/{RGT_SIZE / 1e6:.1f} MB | {rate / 1e6:.1f} MB/s | ETA {eta:.0f}s", flush=True)
+                    last = now
         if tmp.stat().st_size != RGT_SIZE:
             print(f"!! RGT-Est download is incomplete ({tmp.stat().st_size} of {RGT_SIZE} bytes)")
             return False

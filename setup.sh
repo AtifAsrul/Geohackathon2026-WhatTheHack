@@ -1,46 +1,90 @@
 #!/bin/bash
-# One-time installation of Exploration Copilot on the HPC.
-#     bash setup.sh
-# Safe to run again: finished parts are skipped. Nothing here needs administrator rights.
-
+# App-local installation; existing environments/models are reused.
 cd "$(dirname "$0")" || exit 1
+set -o pipefail
 PYBIN="${PYTHON:-python3}"
-say() { echo; echo "=================================================================="; echo "  $1"; echo "=================================================================="; }
+export PYTHONUNBUFFERED=1
+export HF_HUB_DISABLE_PROGRESS_BARS=0
+export HF_HOME="${HF_HOME:-$PWD/models/.cache/huggingface}"
+LOGDIR="${COPILOT_WORKSPACE:-$PWD/workspace}/logs"
+mkdir -p "$LOGDIR" || exit 1
+exec > >(tee -a "$LOGDIR/setup.log") 2>&1
+SECONDS=0
+WARNINGS=0
+say() {
+  local done=$(( $1 - 1 )) bar="" i
+  for ((i=0; i<6; i++)); do
+    if ((i < done)); then bar+="#"; elif ((i == done)); then bar+=">"; else bar+="-"; fi
+  done
+  echo
+  echo "[$bar] Setup step $1/6 - $2 (elapsed ${SECONDS}s)"
+}
+run() {
+  local label="$1"; shift
+  "$PYBIN" -u scripts/terminal.py run --label "$label" -- "$@"
+  local code=$?
+  if ((code == 130 || code == 143)); then exit "$code"; fi
+  return "$code"
+}
+optional() {
+  if ! run "$@"; then
+    WARNINGS=$((WARNINGS + 1))
+    echo "[WARNING] $1 failed; see output above. Its fallback will be used if available."
+  fi
+}
+trap 'code=$?; if ((code != 0)); then echo "[FAILED] Setup stopped (exit $code). Log: $LOGDIR/setup.log"; fi' EXIT
+echo "Setup started: $(date -Is)"
+echo "Detailed output is also saved to $LOGDIR/setup.log"
+echo "Bars count setup steps, not elapsed-time percentage. Quiet commands report every 15 seconds."
 
-say "Step 1 of 5 - Python environment"
+say 1 "Python environment"
 "$PYBIN" -V || { echo "Python was not found. Stop and ask a mentor."; exit 1; }
 if [ ! -x .venv/bin/python ]; then
-  # reuse the HPC's own PyTorch if the default Python has it
-  "$PYBIN" -m venv --system-site-packages .venv || "$PYBIN" -m venv .venv || { echo "Could not create the environment."; exit 1; }
+  run "Create app environment" "$PYBIN" -m venv --system-site-packages .venv \
+    || run "Create isolated app environment" "$PYBIN" -m venv .venv || exit 1
+else
+  echo "[REUSE] Existing .venv"
 fi
-.venv/bin/python -m pip install --upgrade pip -q
+optional "Upgrade app pip" .venv/bin/python -m pip install --upgrade pip --progress-bar on
 
-say "Step 2 of 5 - App packages"
-.venv/bin/pip install -q -r requirements.txt || echo "!! Some app packages failed to install (see messages above)."
+say 2 "App packages"
+# Required packages must succeed before setup can report completion.
+run "Install required app packages" .venv/bin/python -m pip install --progress-bar on -r requirements.txt || exit 1
 if ! .venv/bin/python -c "import torch" 2>/dev/null; then
-  echo "PyTorch is not in the default Python - installing it (large download, please wait)..."
-  .venv/bin/pip install -q torch torchvision || echo "!! PyTorch could not be installed. The app will use its simpler fallback methods."
+  optional "Install PyTorch (large download)" .venv/bin/python -m pip install --progress-bar on torch torchvision
+else
+  echo "[REUSE] PyTorch is available"
 fi
 
-say "Step 3 of 5 - NCS seismic foundation model code"
-.venv/bin/pip install -q "transformers[torch]~=4.50.2" "huggingface-hub>=0.24,<1.0" || echo "!! transformers could not be installed."
-.venv/bin/pip install -q --no-deps "git+https://github.com/NorskRegnesentral/NCS_models" 2>/dev/null \
-  || .venv/bin/pip install -q --no-deps "https://github.com/NorskRegnesentral/NCS_models/archive/refs/heads/main.zip" \
-  || echo "!! NCS could not be installed. Facies will use the simpler fallback."
+say 3 "NCS foundation model code"
+optional "Install transformers" .venv/bin/python -m pip install --progress-bar on "transformers[torch]~=4.50.2" "huggingface-hub>=0.24,<1.0"
+if ! run "Install NCS from GitHub" .venv/bin/python -m pip install --progress-bar on --no-deps "git+https://github.com/NorskRegnesentral/NCS_models"; then
+  optional "Install NCS from ZIP fallback" .venv/bin/python -m pip install --progress-bar on --no-deps "https://github.com/NorskRegnesentral/NCS_models/archive/refs/heads/main.zip"
+fi
 
-say "Step 4 of 5 - SDIP converter (SEG-Y to AI-ready format), in its own environment"
+say 4 "SDIP converter (separate app environment)"
 if [ ! -x .venv-sdip/bin/sdip ]; then
-  "$PYBIN" -m venv .venv-sdip && .venv-sdip/bin/python -m pip install --upgrade pip -q
-  .venv-sdip/bin/pip install -q "git+https://github.com/zahidaramai/sdip@v1.7.0" 2>/dev/null \
-    || .venv-sdip/bin/pip install -q "https://github.com/zahidaramai/sdip/archive/refs/tags/v1.7.0.zip" \
-    || echo "!! SDIP could not be installed. The app will read SEG-Y with its built-in reader instead."
+  if run "Create SDIP environment" "$PYBIN" -m venv .venv-sdip; then
+    optional "Upgrade SDIP pip" .venv-sdip/bin/python -m pip install --upgrade pip --progress-bar on
+    if ! run "Install SDIP from GitHub" .venv-sdip/bin/python -m pip install --progress-bar on "git+https://github.com/zahidaramai/sdip@v1.7.0"; then
+      optional "Install SDIP from ZIP fallback" .venv-sdip/bin/python -m pip install --progress-bar on "https://github.com/zahidaramai/sdip/archive/refs/tags/v1.7.0.zip"
+    fi
+  else
+    WARNINGS=$((WARNINGS + 1))
+    echo "[WARNING] SDIP environment unavailable; built-in SEG-Y reader will be used."
+  fi
+else
+  echo "[REUSE] Existing SDIP converter"
 fi
 
-say "Step 5 of 5 - Pretrained models (RGT-Est and NCS), about 1 GB in total"
-.venv/bin/python scripts/download_models.py
+say 5 "Pretrained models (about 1 GB total)"
+optional "Download RGT-Est and NCS models" .venv/bin/python -u scripts/download_models.py
 
-say "Self-check"
-.venv/bin/python scripts/check.py
+say 6 "Self-check"
+run "Check installed components and HPC access" .venv/bin/python -u scripts/check.py || exit 1
 
 echo
-echo "Setup finished. To start the app, type:   bash start.sh"
+echo "[######] Setup steps finished in ${SECONDS}s; $WARNINGS optional command warning(s)."
+echo "Review [--] in the self-check too: these identify missing components/fallbacks."
+echo "Log: $LOGDIR/setup.log"
+echo "To start: bash start.sh"

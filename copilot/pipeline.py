@@ -233,7 +233,7 @@ export COPILOT_WORKSPACE="{ws}"
 export COPILOT_MODELS="{models}"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
-"{python}" -m copilot.pipeline --stages {stages} --in-job --strict
+"{python}" -u -m copilot.pipeline --stages {stages} --in-job --strict
 """
 
 
@@ -276,7 +276,7 @@ def run_gpu_stages(force=False, use_slurm=True, want=("rgt", "sfm")):
             limit = int(os.environ.get("COPILOT_RGT_CPU_MIN", "60"))
             log(f"Trying RGT-Est on this machine (up to {limit} minutes)")
             try:
-                r = subprocess.run([sys.executable, "-m", "copilot.pipeline", "--stages", "rgt", "--in-job", "--strict"],
+                r = subprocess.run([sys.executable, "-u", "-m", "copilot.pipeline", "--stages", "rgt", "--in-job", "--strict"],
                                    cwd=str(config.ROOT), timeout=limit * 60)
                 done = r.returncode == 0 and out["rgt"].exists()
             except subprocess.TimeoutExpired:

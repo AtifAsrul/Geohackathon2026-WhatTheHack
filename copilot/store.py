@@ -128,14 +128,18 @@ def _convert_sdip(src, out, log):
         log("SDIP is not installed - using the built-in SEG-Y reader instead")
         return False
     cmd = [exe, "ingest", str(src), str(out), "--overwrite", "--envelope-gib", "0"]
+    logfile = config.LOGS / f"sdip_{Path(out).stem}.log"
+    log(f"SDIP conversion active; live output: {logfile}")
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=8 * 3600)
+        with logfile.open("w", encoding="utf-8") as stream:
+            r = subprocess.run(cmd, stdout=stream, stderr=subprocess.STDOUT, timeout=8 * 3600)
     except Exception as e:
         log(f"SDIP could not run ({e}) - using the built-in SEG-Y reader")
         return False
-    (config.LOGS / f"sdip_{Path(out).stem}.log").write_text((r.stdout or "") + "\n" + (r.stderr or ""))
     if r.returncode != 0:
-        tail = ((r.stderr or r.stdout or "").strip().splitlines() or ["no message"])[-1]
+        with logfile.open("rb") as stream:
+            stream.seek(max(0, logfile.stat().st_size - 4096))
+            tail = (stream.read().decode("utf-8", errors="replace").strip().splitlines() or ["no message"])[-1]
         log(f"SDIP refused this file ({tail[:160]}) - using the built-in SEG-Y reader")
         shutil.rmtree(out, ignore_errors=True)
         return False
