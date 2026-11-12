@@ -233,6 +233,8 @@ export COPILOT_WORKSPACE="{ws}"
 export COPILOT_MODELS="{models}"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
+export OPENBLAS_NUM_THREADS=1 GOTO_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1
+export OMP_NUM_THREADS=1 OMP_MAX_ACTIVE_LEVELS=1
 "{python}" -u -m copilot.pipeline --stages {stages} --in-job --strict
 """
 
@@ -248,6 +250,10 @@ def _ram_gb():
         return 0.0
 
 
+class SlurmStopError(RuntimeError):
+    """The previous worker could not be stopped safely; do not start a fallback."""
+
+
 def run_gpu_stages(force=False, use_slurm=True, want=("rgt", "sfm")):
     """Run RGT-Est and/or the foundation model on a GPU node when one can be had, else here."""
     out = {"rgt": I / "rgt.npy", "sfm": I / "facies.npy"}
@@ -260,6 +266,8 @@ def run_gpu_stages(force=False, use_slurm=True, want=("rgt", "sfm")):
     if use_slurm and shutil.which("sbatch") and os.environ.get("COPILOT_NO_SLURM") != "1":
         try:
             _slurm_job(todo)
+        except SlurmStopError:
+            raise
         except Exception as e:
             log(f"GPU job did not work out ({e}) - continuing on this machine")
     # whatever is still missing is done locally (GPU if this machine has one, else CPU)
@@ -329,6 +337,20 @@ def _slurm_job(todo=("rgt", "sfm")):
         if state != last:
             set_status(message=f"GPU job {jid}: {state.lower()}")
             last = state
+        if state in {"SPECIAL_EXIT", "REQUEUE_HOLD", "REVOKED", "FAILED", "CANCELLED", "TIMEOUT",
+                     "OUT_OF_MEMORY", "NODE_FAIL", "BOOT_FAIL", "DEADLINE", "PREEMPTED"}:
+            # A held/crashed job will not make progress while it stays in squeue.
+            # Do not fall back while an automatic requeue could restart the same worker.
+            # Cancel only this job, which this process just submitted.
+            try:
+                stopped = subprocess.run(["scancel", jid], capture_output=True, text=True)
+            except OSError as exc:
+                raise SlurmStopError(f"GPU job {jid} is {state}; could not run scancel: {exc}") from exc
+            if stopped.returncode != 0 and "Invalid job id" not in stopped.stderr:
+                raise SlurmStopError(f"GPU job {jid} is {state}; could not cancel it: {stopped.stderr.strip()[:300]}")
+            raise RuntimeError(f"GPU job {jid} stopped in {state}; see {str(joblog).replace('%j', jid)}")
+        if state == "COMPLETED":
+            break
         if state == "PENDING" and time.time() - t0 > wait_min * 60:
             subprocess.run(["scancel", jid])
             raise RuntimeError(f"no GPU became free within {wait_min:.0f} minutes")
@@ -344,6 +366,8 @@ def _slurm_job(todo=("rgt", "sfm")):
 # ------------------------------------------------------------------ orchestration
 def run(stages=None, force=False, use_slurm=True, in_job=False, strict=False):
     stages = stages or STAGES
+    from .runtime import cpu_threads
+    print(f"[runtime] Process-local thread limits: BLAS=1, OpenMP={cpu_threads()}", flush=True)
     if not in_job:
         set_status(stage=stages[0], message="Starting", state="running", error=None, log=[],
                    stages=[{"id": s, "label": STAGE_LABEL[s]} for s in STAGES], started=time.time())

@@ -182,6 +182,42 @@ selects the fallback for **new** conversions. Existing SDIP environments and ori
 are left in place. Stop/relaunch this trial app before expecting a running process to use new code;
 the separate read-only monitor can attach without stopping an existing run.
 
+### Recovering a stage-5 OpenBLAS crash
+
+If a GPU log says `OpenBLAS ... too many memory regions`, then `Segmentation fault`, that
+worker has crashed. A following Slurm `SPECIAL_EXIT` is a held job, not a running calculation.
+Older app versions continued waiting on this state and refreshed their heartbeat indefinitely.
+
+The app now sets process-local BLAS thread limits before loading numerical libraries, uses a
+scoped BLAS limit around PCA/clustering, and respects `SLURM_CPUS_PER_TASK` for OpenMP. The
+worker script also exports limits before Python starts. These changes do not modify system
+Python, rebuild OpenBLAS, or change the HPC's configuration/GPU allocation. Failed/held Slurm
+states are detected promptly; the app cancels only the job it submitted before taking its
+fallback path. A failure to cancel stops the pipeline instead of launching a competing fallback.
+
+For a run that completed RGT but crashed during facies grouping:
+
+1. Press Ctrl+C in the app terminal to stop the waiting foreground run.
+2. In `squeue -u "$USER"`, identify the failed/held job from that run and cancel that specific job
+   with `scancel JOB_ID`. Do not cancel another teammate's active job.
+3. Pull the update, then resume the remaining stages in the **same workspace**, without `--force`:
+
+```bash
+cd /data/epic20/APGCE/$USER/exploration-copilot
+git pull --ff-only origin main
+COPILOT_WORKSPACE="$PWD/workspace-openvds" .venv/bin/python -u -m copilot.pipeline --stages sfm,horizons,faults,leads,knowledge
+```
+
+This preserves converted volumes, the interpretation grid, and `rgt.npy`. Foundation-model
+features may be calculated again because the old run did not save a completed facies result.
+After the command finishes, launch the app again with the same `COPILOT_WORKSPACE` setting.
+Avoid **Re-run interpretation** for recovery: it clears interpretation outputs and starts over.
+
+Check input coverage too: five stack volumes and zero wells indicate a partial-data run. For the
+complete challenge, select `/data/epic20/APGCE/input_data/challenge1_challenge2`, which includes
+`stack/`, `inversion/`, and `well_data/`. Resuming stages alone does not import missing data or
+rebuild a previously saved grid with additional inversion products.
+
 ---
 
 ## Part D — First run (once — do this well before the judging)

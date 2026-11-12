@@ -185,6 +185,7 @@ def reduce_and_cluster(feats, k=6, dims=24, seed=0, log=print):
     """PCA then k-means. Returns (unit-length reduced features (a,b,c,D), labels (a,b,c))."""
     from sklearn.cluster import MiniBatchKMeans
     from sklearn.decomposition import PCA
+    from threadpoolctl import threadpool_limits
 
     shp = feats.shape[:3]
     X = feats.reshape(-1, feats.shape[-1]).astype(np.float32)
@@ -193,11 +194,14 @@ def reduce_and_cluster(feats, k=6, dims=24, seed=0, log=print):
     sub = X[rng.choice(len(X), size=min(len(X), 150000), replace=False)]
     d = int(min(dims, X.shape[1], max(2, len(sub) - 1)))
     log(f"Facies: reducing {X.shape[1]} features to {d}")
-    pca = PCA(n_components=d, random_state=seed).fit(sub)
-    Z = pca.transform(X).astype(np.float32)
-    Z /= (np.linalg.norm(Z, axis=1, keepdims=True) + 1e-9)
-    log(f"Facies: grouping into {k} seismic facies")
-    km = MiniBatchKMeans(n_clusters=k, random_state=seed, n_init=5, batch_size=4096).fit(Z)
+    # sklearn already depends on threadpoolctl. Limit loaded BLAS pools as well
+    # as startup environment variables, including libraries imported before us.
+    with threadpool_limits(limits=1, user_api="blas"):
+        pca = PCA(n_components=d, random_state=seed).fit(sub)
+        Z = pca.transform(X).astype(np.float32)
+        Z /= (np.linalg.norm(Z, axis=1, keepdims=True) + 1e-9)
+        log(f"Facies: grouping into {k} seismic facies (BLAS threads: 1)")
+        km = MiniBatchKMeans(n_clusters=k, random_state=seed, n_init=5, batch_size=4096).fit(Z)
     return Z.reshape(shp + (d,)), km.labels_.reshape(shp).astype(np.uint8)
 
 
