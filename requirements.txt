@@ -1,0 +1,14 @@
+numpy
+scipy
+fastapi
+uvicorn
+requests
+segyio
+lasio
+openpyxl
+pillow
+scikit-learn
+zarr>=3.2
+xarray
+dask
+tqdm

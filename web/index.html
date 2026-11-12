@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exploration Copilot</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="mark">◈</span> Exploration Copilot</div>
+  <div class="pills">
+    <span class="pill" id="pill-data"><i></i><span>No data yet</span></span>
+    <span class="pill" id="pill-interp"><i></i><span>Not interpreted</span></span>
+    <span class="pill" id="pill-llm"><i></i><span>Assistant</span></span>
+  </div>
+  <div class="actions">
+    <button id="btn-import" class="ghost">Import data</button>
+    <button id="btn-run" class="primary">Run interpretation</button>
+  </div>
+</header>
+
+<div id="progress" class="hidden">
+  <div class="prog-steps" id="prog-steps"></div>
+  <div class="prog-msg" id="prog-msg"></div>
+</div>
+
+<main>
+  <section id="viewer">
+    <div class="toolbar">
+      <label>Volume <select id="sel-vol"></select></label>
+      <label>Colours <select id="sel-cmap">
+        <option value="gray">Grey</option><option value="seismic">Red / blue</option>
+        <option value="viridis">Viridis</option><option value="rainbow">Rainbow</option></select></label>
+      <label>Contrast <button class="mini" id="gain-down">−</button><button class="mini" id="gain-up">+</button></label>
+      <span class="sep"></span>
+      <span class="layers" id="layers">
+        <button data-layer="horizons" class="chip on">Horizons</button>
+        <button data-layer="faults" class="chip">Faults</button>
+        <button data-layer="facies" class="chip">Facies</button>
+        <button data-layer="wells" class="chip on">Wells</button>
+        <button data-layer="leads" class="chip on">Leads</button>
+        <button data-layer="similar" class="chip hidden" id="chip-similar">Look-alikes</button>
+      </span>
+    </div>
+    <div class="panels">
+      <div class="panel" id="p-section">
+        <div class="phead">
+          <div class="tabs" id="tabs-axis">
+            <button data-axis="i" class="on">Inline</button><button data-axis="x">Crossline</button>
+          </div>
+          <div class="stepper">
+            <button class="mini" id="line-prev">◀</button>
+            <input type="number" id="line-num">
+            <button class="mini" id="line-next">▶</button>
+          </div>
+          <input type="range" id="line-slider" class="slider">
+        </div>
+        <div class="canvas-wrap"><canvas id="cv-section"></canvas><div class="empty" id="empty-section"></div></div>
+      </div>
+      <div class="panel" id="p-map">
+        <div class="phead">
+          <div class="tabs" id="tabs-map">
+            <button data-map="slice" class="on">Time slice</button><button data-map="horizon">Horizon map</button>
+          </div>
+          <div class="stepper" id="time-stepper">
+            <button class="mini" id="time-prev">◀</button>
+            <input type="number" id="time-num"><span class="unit">ms</span>
+            <button class="mini" id="time-next">▶</button>
+          </div>
+          <div class="stepper hidden" id="hz-controls">
+            <select id="sel-hz"></select><select id="sel-attr"></select>
+          </div>
+          <input type="range" id="time-slider" class="slider">
+        </div>
+        <div class="canvas-wrap"><canvas id="cv-map"></canvas><div class="empty" id="empty-map"></div></div>
+      </div>
+    </div>
+    <div class="readout">
+      <span id="readout">Click a picture to move the crosshair. Scroll to step through lines. Ctrl + scroll to zoom, drag to move, double-click to reset.</span>
+      <button class="ghost small" id="btn-similar" title="Find other places whose seismic looks like the crosshair spot">Find look-alikes</button>
+      <button class="ghost small" id="btn-explain" title="Ask the assistant about the crosshair spot">Explain this spot</button>
+    </div>
+  </section>
+
+  <section id="side">
+    <div class="tabs big" id="tabs-side">
+      <button data-side="chat" class="on">Assistant</button>
+      <button data-side="leads">Leads</button>
+      <button data-side="about">How it works</button>
+    </div>
+    <div class="side-body" id="side-chat">
+      <div id="messages"></div>
+      <div id="suggest"></div>
+      <form id="chat-form">
+        <textarea id="chat-input" rows="2" placeholder="Ask about the geology, a lead, a well, or what you are looking at…"></textarea>
+        <div class="chat-row">
+          <label class="check"><input type="checkbox" id="attach-view"> Show the assistant my current section</label>
+          <button class="primary" id="chat-send" type="submit">Ask</button>
+        </div>
+      </form>
+    </div>
+    <div class="side-body hidden" id="side-leads"></div>
+    <div class="side-body hidden" id="side-about"></div>
+  </section>
+</main>
+
+<div id="modal" class="hidden">
+  <div class="dialog">
+    <h2>Import data</h2>
+    <p>Choose the folder on this computer that holds the SEG-Y volumes and the well data. Everything inside it is picked up automatically.</p>
+    <div class="pathrow"><input id="imp-path" type="text" spellcheck="false"><button class="ghost" id="imp-go">Open</button></div>
+    <div id="imp-list"></div>
+    <div id="imp-found"></div>
+    <div class="dialog-actions">
+      <button class="ghost" id="imp-cancel">Cancel</button>
+      <button class="primary" id="imp-use">Use this folder</button>
+    </div>
+  </div>
+</div>
+<div id="tip" class="hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

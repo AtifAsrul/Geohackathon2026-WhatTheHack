@@ -1,0 +1,9 @@
+workspace/
+models/
+.venv/
+.venv-sdip/
+__pycache__/
+*.pyc
+setup.log
+synthetic_data/
+demo_data/
