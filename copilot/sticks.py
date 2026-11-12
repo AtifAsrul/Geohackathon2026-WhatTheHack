@@ -1,7 +1,7 @@
 """Fault sticks: short lines that follow a fault on one section, the way an interpreter picks them.
 
 The app proposes sticks from the fault-likelihood cube (ridges of low coherence), measures the throw across
-each one, and - after the assistant has accepted or rejected them - joins sticks on neighbouring lines into
+each one, and uses measured throw/fit tests to join sticks on neighbouring lines into
 named faults. Units inside this module are grid indices: lateral trace index and time-sample index.
 """
 import numpy as np
@@ -254,7 +254,7 @@ def describe_faults(sticks, groups, grid, min_sticks=2):
         trend = None
         if strike is not None:
             trend = ["N-S", "NNE-SSW", "NE-SW", "ENE-WSW", "E-W", "ESE-WNW", "SE-NW", "SSE-NNW"][int(((strike + 11.25) % 180) // 22.5)]
-        rev = [sticks[n] for n in members if sticks[n].get("verdict") not in (None, "unreviewed")]
+        rev = []  # Gemma does not accept, reject, draw or move fault sticks.
         ci, cx = float(np.median(gi)), float(np.median(gx))
         recs.append({"_members": members, "_size": len(members) * float(np.ptp(tt) + 1),
                      "strike_deg": None if strike is None else round(strike), "trend": trend,
@@ -273,3 +273,37 @@ def describe_faults(sticks, groups, grid, min_sticks=2):
             sticks[m]["fault"] = r["id"]
         r.pop("_size")
     return recs
+
+
+def build(grid, seis, fl, live, output, log=print, step=8):
+    """Extract and link measured fault sticks without any language-model calls."""
+    from .config import write_json
+    dt = float(grid["dt_ms"])
+    min_h = max(16, int(round(80.0 / dt)))
+    ni, nx, _ = seis.shape
+    lines = {"i": np.arange((ni // 2) % step, ni, step), "x": np.arange((nx // 2) % step, nx, step)}
+    allst = []
+    for axis, indices in lines.items():
+        for gl in indices:
+            sec = seis[gl] if axis == "i" else seis[:, gl]
+            fsec = fl[gl] if axis == "i" else fl[:, gl]
+            for n, s in enumerate(section_sticks(fsec, min_h, max_n=8)):
+                lag, corr, lags = stick_throw(sec, s)
+                accepted = bool(s["fl"] >= 0.4 and abs(lag) >= 1.5 and corr >= 0.7 and len(lags) >= 2 and
+                                (max(lags) - min(lags)) <= max(4.0, 0.5 * abs(lag)))
+                s.update({"id": f"{axis}{int(gl)}-{n + 1}", "axis": axis, "g": int(gl),
+                          "line": int(grid["ilines" if axis == "i" else "xlines"][gl]),
+                          "throw_samples": round(lag, 1), "throw_ms": round(lag * dt, 1), "throw_fit": round(corr, 2),
+                          "throw_by_depth_ms": [round(v * dt, 1) for v in lags], "code_ok": accepted,
+                          "accepted": accepted, "verdict": "fault" if accepted else "not_fault", "reviewed_by": "algorithm",
+                          "why": "Measured likelihood, reflector offset and cross-fault fit tests " + ("passed" if accepted else "failed"),
+                          "disputed": False})
+                allst.append(s)
+    groups = link_sticks(allst, step, fl)
+    named = describe_faults(allst, groups, grid)
+    write_json(output / "sticks.json", {"step": step, "lines": {k: [int(v) for v in a] for k, a in lines.items()},
+               "sticks": allst, "method": "algorithmic likelihood and measured throw/fit tests", "gemma_used": False,
+               "reviewed_lines": 0, "decoys": {"shown": 0, "rejected": 0, "votes_used": False}})
+    write_json(output / "fault_surfaces.json", named)
+    log(f"Fault sticks: {sum(s['accepted'] for s in allst)} of {len(allst)} kept by measured tests, {len(named)} named faults; no Gemma")
+    return {"sticks": len(allst), "accepted": sum(s["accepted"] for s in allst), "faults": len(named), "gemma_used": False}

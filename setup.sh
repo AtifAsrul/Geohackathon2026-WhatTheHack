@@ -65,8 +65,10 @@ fi
 say 4 "OpenVDS converter and reader (app environment only)"
 optional "Install OpenVDS wheel" .venv/bin/python -m pip install --progress-bar on --only-binary=:all: "openvds==3.4.9"
 
-say 5 "Pretrained models (about 1 GB total)"
+say 5 "Pretrained RGT, NCS and FaultSSL models"
 optional "Download RGT-Est and NCS models" .venv/bin/python -u scripts/download_models.py
+optional "Install FaultSSL download helper" .venv/bin/python -m pip install gdown
+optional "Download FaultSSL Precision First" .venv/bin/python -u scripts/download_faultssl.py
 
 say 6 "Self-check"
 run "Check installed components and HPC access" .venv/bin/python -u scripts/check.py || exit 1

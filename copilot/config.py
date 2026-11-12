@@ -32,6 +32,9 @@ GRID_MAX_TIME = int(os.environ.get("COPILOT_GRID_TIME", "800"))
 RGT_WEIGHTS = MODELS / "rgt" / "RGT-Est_CIG-Benchmark.pt"
 NCS_MODEL_DIRS = [MODELS / "ncs" / "NCS-v1-2.5d-base", MODELS / "ncs" / "NCS-v1-2d-base"]
 SFM_WEIGHTS_DIR = MODELS / "sfm"     # optional: Sheng et al. SFM checkpoint (*.pth) placed by hand
+FAULTSSL_WEIGHTS = Path(os.environ.get("COPILOT_FAULTSSL_WEIGHTS", MODELS / "faultssl" / "PrecisionFirst.pt"))
+FAULT_METHOD = os.environ.get("COPILOT_FAULT_METHOD", "auto")  # auto, faultssl, coherence
+FAULT_COHERENCE_MAX = os.environ.get("COPILOT_FAULT_COHERENCE_MAX")  # None preserves the saved setting
 
 # The assistant's own interpretation pass (pictures sent to the shared Gemma model).
 LLM_CACHE = WORKSPACE / "llm_cache"  # every answer is kept, so a stopped run resumes without asking again

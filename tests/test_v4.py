@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def run_pipeline(ws, args, **env):
-    e = dict(os.environ, COPILOT_WORKSPACE=str(ws), COPILOT_LLM_URL="mock", COPILOT_NO_OPENVDS="1", COPILOT_NO_SLURM="1")
+    e = dict(os.environ, COPILOT_WORKSPACE=str(ws), COPILOT_LLM_URL="mock", COPILOT_NO_OPENVDS="1", COPILOT_NO_SLURM="1",
+             COPILOT_FAULT_METHOD="coherence")
     e.pop("COPILOT_MOCK_MODE", None)
     e.update(env)
     r = subprocess.run([sys.executable, "-m", "copilot.pipeline", "--no-slurm"] + args, cwd=str(ROOT), env=e,

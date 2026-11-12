@@ -6,7 +6,6 @@ After the measured interpretation is finished, Gemma is shown pictures and asked
   wells     what do the logs of each well show?
   leads     looking at the two sections through each lead: is the trap visible?
   slices    what features are visible on time slices (channels, fault lines, fold bands)?
-  sticks    which of the numbered candidate fault sticks are real faults?
   horizons  which numbered reflectors are the key horizons, and how do they continue across faults?
 
 Gemma never gives coordinates. It picks between numbered marks or lettered grid squares that the app drew,
@@ -366,94 +365,8 @@ def read_slices(c, n_cells=8, max_slices=14):
 
 # ====================================================================== fault sticks
 def do_sticks(c, max_review=10):
-    min_h = max(16, int(round(80.0 / c.dt)))
-    allst = []
-    for axis, idxs in (("i", c.il_idx), ("x", c.xl_idx)):
-        for gl in idxs:
-            sec, fsec = _sec(c, axis, gl), _sec(c, axis, gl, c.fl)
-            for n, s in enumerate(sticks_mod.section_sticks(fsec, min_h, max_n=8)):
-                lag, corr, lags = sticks_mod.stick_throw(sec, s)
-                s.update({"id": f"{axis}{int(gl)}-{n + 1}", "axis": axis, "g": int(gl), "line": _line_no(c, axis, gl),
-                          "throw_samples": round(lag, 1), "throw_ms": round(lag * c.dt, 1), "throw_fit": round(corr, 2),
-                          "throw_by_depth_ms": [round(v * c.dt, 1) for v in lags], "verdict": "unreviewed", "why": "",
-                          # the app's own test: a clear, well-matched step that is about the same at every depth
-                          "code_ok": bool(s["fl"] >= 0.4 and abs(lag) >= 1.5 and corr >= 0.7 and len(lags) >= 2 and
-                                          (max(lags) - min(lags)) <= max(4.0, 0.5 * abs(lag)))})
-                allst.append(s)
-    shown = rejected = 0
-    reviewed_lines = 0
-    jobs, meta = [], []
-    for axis, idxs in (("i", c.il_idx), ("x", c.xl_idx)):
-        have = [int(gl) for gl in idxs if any(s["axis"] == axis and s["g"] == int(gl) for s in allst)]
-        pick = have if len(have) <= max_review else [have[int(round(q))] for q in np.linspace(0, len(have) - 1, max_review)]
-        for gl in sorted(set(pick)):
-            real = [s for s in allst if s["axis"] == axis and s["g"] == gl]
-            lv = c.live[gl, :] if axis == "i" else c.live[:, gl]
-            dec = sticks_mod.decoy_sticks(_sec(c, axis, gl, c.fl), real, 1, min_h, seed=gl + (0 if axis == "i" else 7919), live_row=lv)
-            items = real + dec
-            order = np.random.default_rng(gl).permutation(len(items))
-            items = [items[q] for q in order]
-            lines = [{"pts": [(float(_num(c, axis, p[0])), float(_ms(c, p[1]))) for p in s["pts"]], "label": str(n + 1),
-                      "color": tools.MARK_COLORS[n % len(tools.MARK_COLORS)], "width": 3, "at": 0.15 + 0.7 * (n % 3) / 2.0}
-                     for n, s in enumerate(items)]
-            name = f"{'Inline' if axis == 'i' else 'Crossline'} {_line_no(c, axis, gl)}"
-            prompt = (RULES + f"{name}: a vertical seismic section (time increases downwards). The numbered coloured lines are "
-                      "places where the app measured that neighbouring traces differ. Some are real faults; others are edges of "
-                      "channels or sand bodies, noise, or nothing at all.\n"
-                      "Judge each line by the reflectors on either side of it. A FAULT: reflectors are cut at the line and continue "
-                      "on the other side shifted up or down, over a tall interval. NOT A FAULT: reflectors pass through the line "
-                      "unbroken, or only one bright event ends there.\n"
-                      'JSON: {"lines": [{"id": 1, "verdict": "fault|not_fault|unsure", "down": "left|right|none", "why": "..."}]}\n'
-                      '"down" is the side on which the reflectors sit lower.')
-            mock = {"lines": [{"id": n + 1, "verdict": "not_fault" if s.get("decoy") else ("fault" if s["code_ok"] else "not_fault"),
-                               "down": "none" if s.get("decoy") or not s["code_ok"] else ("right" if s["throw_samples"] > 0 else "left"),
-                               "why": "stand-in model: from the measured offset across the line"} for n, s in enumerate(items)]}
-            jobs.append({"task": "sticks", "prompt": prompt, "image": _picture(c, axis, gl, name + " - candidate faults", lines), "mock": mock,
-                         "max_tokens": 700})
-            meta.append(items)
-    for items, a in zip(meta, llm.ask_many(jobs)):
-        rows = (a or {}).get("lines") if isinstance(a, dict) else None
-        if not isinstance(rows, list):
-            continue
-        got = {}
-        for r in rows:
-            try:
-                n = int(r.get("id"))
-            except Exception:
-                continue
-            if 1 <= n <= len(items) and r.get("verdict") in ("fault", "not_fault", "unsure"):
-                got[n] = r
-        if not got:
-            continue
-        reviewed_lines += 1
-        for n, s in enumerate(items):
-            r = got.get(n + 1)
-            if s.get("decoy"):
-                if r:
-                    shown += 1
-                    rejected += r["verdict"] == "not_fault"
-                continue
-            if r:
-                s.update({"verdict": r["verdict"], "why": _text(r.get("why")),
-                          "down_seen": r.get("down") if r.get("down") in ("left", "right", "none") else None})
-    trust = _trusted(shown, rejected)
-    for s in allst:
-        if s["verdict"] == "unreviewed" or not trust:
-            s["accepted"] = s["code_ok"]
-        else:
-            s["accepted"] = bool(s["verdict"] == "fault" or (s["verdict"] == "unsure" and s["code_ok"]))
-        s["disputed"] = bool(s["verdict"] in ("fault", "not_fault") and (s["verdict"] == "fault") != s["code_ok"])
-    groups = sticks_mod.link_sticks(allst, STEP, c.fl)
-    faults = sticks_mod.describe_faults(allst, groups, c.g)
-    write_json(I / "sticks.json", {"step": STEP, "lines": {"i": [int(v) for v in c.il_idx], "x": [int(v) for v in c.xl_idx]},
-                                   "sticks": allst, "reviewed_lines": reviewed_lines,
-                                   "decoys": {"shown": int(shown), "rejected": int(rejected), "votes_used": trust}})
-    write_json(I / "fault_surfaces.json", faults)
-    c.log(f"Faults: {len(allst)} candidate sticks on {len(c.il_idx) + len(c.xl_idx)} lines, {sum(s['accepted'] for s in allst)} kept, "
-          f"joined into {len(faults)} named faults; assistant reviewed {reviewed_lines} lines"
-          + (f", rejected {rejected} of {shown} decoys" if shown else ""))
-    return {"sticks": len(allst), "accepted": int(sum(s["accepted"] for s in allst)), "faults": len(faults),
-            "reviewed_lines": reviewed_lines, "decoys_shown": int(shown), "decoys_rejected": int(rejected), "votes_used": trust}
+    """Compatibility entry point: deterministic sticks, never a Gemma request."""
+    return sticks_mod.build(c.g, c.seis, c.fl, c.live, I, log=c.log)
 
 
 # ====================================================================== horizons
@@ -741,7 +654,7 @@ def run(log=print):
     summary = {}
     for name, fn, label in (("facies", review_facies, "facies names"), ("wells", read_wells, "well logs"),
                             ("leads", look_leads, "leads"), ("slices", read_slices, "time slices"),
-                            ("sticks", do_sticks, "fault sticks"), ("horizons", do_horizons, "horizons")):
+                            ("horizons", do_horizons, "horizons")):
         log(f"Assistant's pass: {label}")
         try:
             summary[name] = fn(c)
@@ -751,6 +664,8 @@ def run(log=print):
             summary[name] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
             log(f"!! {label} could not be finished ({type(e).__name__}: {str(e)[:160]})")
     done = {"finished": time.strftime("%Y-%m-%d %H:%M"), "model": config.LLM_MODEL, "reachable": bool(c.reviewed),
+            "fault_source": (read_json(I / "faults.json", {}) or {}).get("source"),
+            "fault_coherence_max": (read_json(I / "faults.json", {}) or {}).get("coherence_max", 1.0),
             "minutes": round((time.time() - t0) / 60.0, 1), "budget_minutes": config.AI_MINUTES,
             "budget_used_up": bool(c.reviewed and not llm.budget_left()), "requests": dict(llm.STATS), "steps": summary}
     llm.set_budget(None)

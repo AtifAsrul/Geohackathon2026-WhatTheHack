@@ -18,7 +18,7 @@ class WellRefreshTests(unittest.TestCase):
             base = Path(tmp)
             data, workspace = base / "data", base / "workspace"
             env = dict(os.environ, COPILOT_WORKSPACE=str(workspace), COPILOT_MODELS=str(base / "models"),
-                       COPILOT_LLM_URL="mock", COPILOT_NO_OPENVDS="1", COPILOT_NO_SLURM="1")
+                       COPILOT_LLM_URL="mock", COPILOT_NO_OPENVDS="1", COPILOT_NO_SLURM="1", COPILOT_FAULT_METHOD="coherence")
 
             def run(*args):
                 result = subprocess.run([sys.executable, *args], cwd=ROOT, env=env,
@@ -69,6 +69,32 @@ class WellRefreshTests(unittest.TestCase):
             self.assertEqual([s["id"] for s in status["stages"]], stages.split(","))
             self.assertEqual(json.loads((workspace / "soft_fail.json").read_text()), [])
             print(f"Verified 6 wells and {len(preserved)} unchanged seismic cache files.", flush=True)
+
+            # A cached model-probability stand-in exercises the new fault-only refresh.
+            # Real TorchScript execution and tiling are covered separately.
+            scientific = [p for p in preserved if p.name not in ("faults.npy", "semb.npy")]
+            def scientific_snapshot():
+                result = {}
+                for p in scientific:
+                    with p.open("rb") as stream:
+                        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                    result[str(p)] = (p.stat().st_mtime_ns, digest)
+                return result
+            old = scientific_snapshot()
+            (interp / "faultssl.npy").write_bytes((interp / "faults_base.npy").read_bytes())
+            model_cache = (interp / "faultssl.npy").stat().st_mtime_ns
+            print("Applying a 0.5 coherence cutoff from cached model probabilities...", flush=True)
+            run("-m", "copilot.pipeline", "--fault-method", "faultssl", "--fault-coherence-max", "0.5",
+                "--force", "--stages", "faults,leads,knowledge,dossier")
+            self.assertEqual(old, scientific_snapshot())
+            self.assertEqual((interp / "faultssl.npy").stat().st_mtime_ns, model_cache)
+            import numpy as np
+            self.assertEqual(int(np.load(interp / "faults.npy")[np.load(interp / "coherence.npy") >= 0.5].max()), 0)
+            self.assertFalse(json.loads((interp / "sticks.json").read_text())["gemma_used"])
+            knowledge = json.loads((workspace / "knowledge.json").read_text())
+            self.assertIn("FaultSSL", knowledge["methods"]["faults"])
+            self.assertEqual(json.loads((workspace / "soft_fail.json").read_text()), [])
+            print("Fault-only refresh preserved converted seismic, RGT, facies and horizons; no model rerun.", flush=True)
 
 
 if __name__ == "__main__":

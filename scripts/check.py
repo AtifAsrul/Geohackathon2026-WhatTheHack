@@ -50,6 +50,8 @@ def environment():
     except Exception as e:
         line(False, "OpenVDS", f"{e} - built-in SEG-Y reader will be used")
     line(config.RGT_WEIGHTS.exists(), "RGT-Est weights", "" if config.RGT_WEIGHTS.exists() else "missing - classical horizons will be used")
+    line(config.FAULTSSL_WEIGHTS.exists(), "FaultSSL Precision First", str(config.FAULTSSL_WEIGHTS) if config.FAULTSSL_WEIGHTS.exists()
+         else "missing - download with scripts/download_faultssl.py; auto mode uses labelled coherence fallback")
     for d in config.NCS_MODEL_DIRS:
         ok = (d / "model.safetensors").exists()
         line(ok, f"NCS model {d.name}", "" if ok else "missing")

@@ -74,8 +74,9 @@ Use that same value for setup, the image probe, the pipeline and the monitor. Th
 
 ### Updating to this version
 
-Routine code updates reuse your saved workspace. This well-folder fix requires no new packages and
-no seismic reinterpretation. Run `bash setup.sh` only if the environment is missing or incomplete.
+Routine code updates reuse your saved workspace. The well-folder fix requires no new packages or
+seismic reinterpretation. For the new fault model, follow the FaultSSL section below; there is no need
+to rerun the full installer or interpretation.
 
 1. Let any active interpretation finish, then stop the app with **Ctrl+C** in its terminal.
 2. **On the HPC**, in that terminal:
@@ -126,6 +127,52 @@ For later well-data changes, **Import data → Update wells only** performs the 
 Avoid **Re-run interpretation** for routine code updates: that action explicitly clears interpretation
 outputs. Changes to seismic algorithms, input volumes or grid settings can require recalculating the
 affected stages and their dependent results; cached files do not automatically track code changes.
+
+### FaultSSL and the coherence slider
+
+This update replaces Gemma fault-stick decisions with algorithmic picks and measured throw/fit checks.
+Gemma still handles chat, horizon second opinions, time slices and well-log readings. Fault sticks are
+created by the fault stage and no longer wait for the assistant pass.
+
+After pulling the update, keep the existing `COPILOT_WORKSPACE`, let active work finish and stop the app.
+The official Precision First TorchScript checkpoint is about 317 MB. Download it once:
+
+```bash
+.venv/bin/python -m pip install gdown
+.venv/bin/python scripts/download_faultssl.py
+```
+
+PyTorch from the original app setup is required for inference. The checkpoint is saved locally as
+`models/faultssl/PrecisionFirst.pt` (override with `COPILOT_FAULTSSL_WEIGHTS` if needed).
+Then run **only** the fault-dependent stages, starting with a coherence cutoff of 0.50:
+
+```bash
+.venv/bin/python -u -m copilot.pipeline \
+  --fault-method faultssl --fault-coherence-max 0.5 \
+  --force --stages faults,leads,knowledge,dossier
+bash start.sh
+```
+
+The first FaultSSL prediction uses the existing Slurm GPU submission settings when Slurm is available.
+It reuses the saved interpretation-grid seismic. Converted volumes, grid, RGT, facies, horizons and well
+calibration are kept. `interp/faultssl.npy` caches the model probabilities and `interp/faults_base.npy`
+keeps the unfiltered scores. There is no training or additional model service.
+
+In the viewer, move **Coherence <** to preview where the fault-likelihood overlay is allowed. Lower is
+stricter: at 0.50, samples with coherence **equal to or above 0.50** are excluded. At 1.00 the filter is off.
+This is the app's 0–1 semblance/coherence measure, not Pearson correlation or model probability.
+Preview affects section and time-slice likelihood overlays; sticks are hidden until you apply or revert
+that preview, so old sticks are not mistaken for newly filtered picks.
+
+Click **Apply to faults** to save the cutoff and recompute fault sticks, leads and evidence. This uses the
+cached model prediction: it does not queue a GPU, rerun FaultSSL, or recompute RGT/facies/horizons.
+FaultSSL probabilities and coherence are separate measures; low coherence alone is not proof of a fault.
+Named sticks also require a consistent, well-matched reflector offset across the candidate.
+
+`auto` mode uses FaultSSL when its checkpoint/cache is available; otherwise it explicitly labels the
+coherence fallback. The command above selects `faultssl` explicitly, so a missing checkpoint is an error.
+Cached assistant visual readings are retained; the evidence limits note if they predate a fault-setting change.
+A changed input grid or a different model checkpoint requires a new prediction cache; cutoff changes do not.
 
 ### Watching progress and debugging
 
@@ -357,7 +404,7 @@ The judges give 10 minutes including the demo. This order shows every part once.
    are RGT-Est, dashed lines are reflectors Gemma chose and the app tracked on a net of lines". Open
    **Horizon map**, choose a G horizon, then "difference from the RGT horizon": white is agreement.
 3. **Faults (1 min).** Point at a red fault stick, then ask: *Tell me about fault F1.* The answer gives its
-   strike, throw and what Gemma saw on the sticks.
+   strike, throw and the measured offset/fit checks behind the sticks.
 4. **Wells tied to seismic (2 min).** Open the **Wells** tab, click **Show logs** on a well. Show the sand
    column and the horizons crossing the logs. Open **How it works** and show the rock-certainty table: "when
    the prediction was this high, the wells showed sand this often".

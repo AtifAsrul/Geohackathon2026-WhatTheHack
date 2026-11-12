@@ -65,7 +65,7 @@ class SlurmStateTests(unittest.TestCase):
             context.start()
             self.addCleanup(context.stop)
 
-    def simulate(self, states, cancel_error=None):
+    def simulate(self, states, cancel_error=None, todo=("rgt", "sfm")):
         states = iter(states)
         def command(args, **kwargs):
             self.calls.append(args)
@@ -80,7 +80,7 @@ class SlurmStateTests(unittest.TestCase):
             raise AssertionError(args)
         with patch.object(self.pipeline.subprocess, "run", side_effect=command), \
                 patch.object(self.pipeline.time, "sleep"), patch.object(self.pipeline, "set_status"):
-            self.pipeline._slurm_job()
+            self.pipeline._slurm_job(todo)
 
     def test_special_exit_fails_promptly_and_cancels_only_own_job(self):
         with self.assertRaisesRegex(RuntimeError, "123 stopped in SPECIAL_EXIT"):
@@ -102,6 +102,13 @@ class SlurmStateTests(unittest.TestCase):
     def test_completed_state_checks_outputs(self):
         with self.assertRaisesRegex(RuntimeError, "ended without results"):
             self.simulate(["COMPLETED\n"])
+
+    def test_faultssl_job_requires_new_model_output_not_an_old_fault_cube(self):
+        (self.root / "faults.npy").touch()
+        with self.assertRaisesRegex(RuntimeError, "ended without results"):
+            self.simulate(["COMPLETED\n"], todo=("faults",))
+        (self.root / "faultssl.npy").touch()
+        self.simulate(["COMPLETED\n"], todo=("faults",))
 
     def test_worker_script_limits_threads_before_python(self):
         text = self.pipeline.JOB_TEMPLATE

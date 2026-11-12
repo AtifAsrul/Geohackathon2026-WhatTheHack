@@ -48,6 +48,9 @@ select:focus, input:focus, textarea:focus { outline: 1px solid var(--accent); }
 .chip { border-radius: 999px; padding: 3px 11px; font-size: 12.5px; color: var(--muted); background: transparent; }
 .chip.on { color: #06221f; background: var(--accent); border-color: var(--accent); font-weight: 600; }
 .layers { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+#fault-cutoff { width: 120px; accent-color: var(--accent); }
+#fault-cutoff-value { min-width: 30px; font-variant-numeric: tabular-nums; }
+.fault-status { color: var(--muted); font-size: 11px; }
 
 .panels { flex: 1; display: flex; min-height: 0; }
 .panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
