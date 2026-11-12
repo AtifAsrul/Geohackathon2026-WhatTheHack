@@ -94,6 +94,9 @@ textarea::placeholder, input::placeholder { color: var(--text-3); }
 .chip { border-radius: 8px; padding: 4px 12px; font-size: 0.8125rem; color: var(--text-3); background: transparent; border-color: transparent; text-decoration: line-through; font-weight: 400; }
 .chip.on { color: var(--text); background: var(--pill); border-color: var(--pill-edge-hover); text-decoration: none; font-weight: 500; }
 .layers { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+#fault-cutoff { width: 120px; }
+#fault-cutoff-value { min-width: 30px; font: 500 0.75rem var(--mono); font-variant-numeric: tabular-nums; color: var(--text-2); }
+.fault-status { color: var(--text-3); font-size: 0.75rem; }
 
 .panels { flex: 1; display: flex; min-height: 0; }
 .panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; }

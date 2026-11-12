@@ -8,6 +8,7 @@ const S = {
   layers: { horizons: true, ghorizons: false, sticks: true, faults: false, facies: false, wells: true, leads: true, similar: false },
   interp: { ready: false }, wells: [], evidence: {}, chat: [], busy: false, hlines: [], outlines: [], sticks: [], ftraces: [],
   well: null, wellData: null, logAxis: "time",
+  faultMax: 1, faultSaved: 1, faultDirty: false,
   hzTime: null, project: {}, status: {}, secData: null, mapData: null,
 };
 const seq = { sec: 0, map: 0 };
@@ -188,7 +189,7 @@ async function updateSection() {
     const ov = [];
     if (S.interp.ready) {
       for (const layer of ["facies", "faults", "similar"]) if (S.layers[layer]) {
-        try { const o = await fetchBin(`/api/overlay?layer=${layer}&axis=${S.axis}&number=${num}`); ov.push({ img: overlayCanvas(layer, o.buf, o.shape), ext: o.ext, smooth: layer !== "facies" }); } catch (e) {}
+        try { const o = await fetchBin(`/api/overlay?layer=${layer}&axis=${S.axis}&number=${num}${layer === "faults" ? "&fault_coherence_max=" + S.faultMax : ""}`); ov.push({ img: overlayCanvas(layer, o.buf, o.shape), ext: o.ext, smooth: layer !== "facies" }); } catch (e) {}
       }
       let hl = [];
       if (S.layers.horizons) hl = hl.concat(await getJSON(`/api/hlines?axis=${S.axis}&number=${num}&source=rgt`).catch(() => []));
@@ -221,7 +222,7 @@ sec.onDraw = (c, p) => {
     else c.fillText(h.name, p.m.l + 4, Math.max(p.m.t + 12, p.Y(h.twt[Math.max(0, nearestIdx(h.pos, p.view.h0))]) - 2));
   }
   // fault sticks
-  if (S.layers.sticks) for (const s of S.sticks) {
+  if (S.layers.sticks && !S.faultDirty) for (const s of S.sticks) {
     c.strokeStyle = "#ff4d4d"; c.lineWidth = 2.6; c.beginPath();
     s.pts.forEach((q, k) => { const x = p.X(q[0]), y = p.Y(q[1]); k ? c.lineTo(x, y) : c.moveTo(x, y); }); c.stroke();
     if (s.fault) { c.fillStyle = "#ff8a8a"; c.fillText(s.fault, p.X(s.pts[0][0]) + 5, Math.max(p.m.t + 12, p.Y(s.pts[0][1]) + 12)); }
@@ -288,7 +289,7 @@ async function updateMap() {
       S.ftraces = S.interp.ready && S.layers.sticks && S.interp.has_sticks ? await getJSON(`/api/fault_traces?twt=${S.twt}`).catch(() => []) : [];
       if (tok !== seq.map) return;
       if (S.interp.ready) for (const layer of ["facies", "faults", "similar"]) if (S.layers[layer]) {
-        try { const o = await fetchBin(`/api/overlay?layer=${layer}&axis=t&number=${S.twt}`); ov.push({ img: overlayCanvas(layer, o.buf, o.shape), ext: o.ext, smooth: layer !== "facies" }); } catch (e) {}
+        try { const o = await fetchBin(`/api/overlay?layer=${layer}&axis=t&number=${S.twt}${layer === "faults" ? "&fault_coherence_max=" + S.faultMax : ""}`); ov.push({ img: overlayCanvas(layer, o.buf, o.shape), ext: o.ext, smooth: layer !== "facies" }); } catch (e) {}
       }
       if (tok !== seq.map) return;
       S.outlines = []; S.mapData = { kind: "slice", buf: r.buf, shape: r.shape, lo, hi, il: v.ilines, xl: v.xlines, label: v.label };
@@ -309,7 +310,7 @@ map.onDraw = (c, p) => {
     for (let k = 0; k < o.il.length; k++) { const x = p.X(o.xl[k]), y = p.Y(o.il[k]); c.fillRect(x - 1, y - 1, 2, 2); sx += x; sy += y; }
     const cx = sx / o.il.length, cy = sy / o.il.length; c.fillStyle = "rgba(0,0,0,.65)"; c.fillRect(cx - 12, cy - 9, 26, 18); c.fillStyle = "#fff"; c.fillText(o.id, cx - 8, cy);
   }
-  if (S.layers.sticks) for (const tr of S.ftraces) {            // named faults where they cut this slice / horizon
+  if (S.layers.sticks && !S.faultDirty) for (const tr of S.ftraces) { // named faults where they cut this slice / horizon
     c.strokeStyle = "#ff4d4d"; c.lineWidth = 2.4; c.beginPath();
     tr.il.forEach((il, k) => { const x = p.X(tr.xl[k]), y = p.Y(il); k ? c.lineTo(x, y) : c.moveTo(x, y); }); c.stroke();
     const m = tr.il.length >> 1; c.fillStyle = "#ff8a8a"; c.fillText(tr.fault, p.X(tr.xl[m]) + 6, p.Y(tr.il[m]));
@@ -408,7 +409,7 @@ $("gain-down").onclick = () => { S.gain = Math.max(0.1, S.gain / 1.4); updateSec
 document.querySelectorAll("#layers .chip").forEach((b) => (b.onclick = () => {
   const l = b.dataset.layer; if (!S.interp.ready && l !== "wells") { note("This layer appears after you run the interpretation."); return; }
   if (l === "ghorizons" && !(S.interp.horizons || []).some((h) => h.source === "gemma")) { note("The assistant's own horizons appear once its pass has finished (the last two steps of the run)."); return; }
-  if (l === "sticks" && !S.interp.has_sticks) { note("Fault sticks appear once the assistant's pass has finished (the last two steps of the run)."); return; }
+  if (l === "sticks" && !S.interp.has_sticks) { note("Fault sticks appear after the fault stage; they use measured offset/fit tests without Gemma."); return; }
   S.layers[l] = !S.layers[l]; b.classList.toggle("on", S.layers[l]); updateSection(); updateMap();
 }));
 window.addEventListener("keydown", (e) => {
@@ -468,11 +469,37 @@ function hint(el, text) {
 }
 function pill(id, cls, text) { const p = $(id); p.className = "pill " + cls; p.querySelector("span").textContent = text; }
 
+function syncFaultControls() {
+  $("fault-cutoff").value = S.faultMax;
+  $("fault-cutoff").style.setProperty("--fill", S.faultMax * 100 + "%");
+  $("fault-cutoff-value").textContent = S.faultMax >= 1 ? "off" : S.faultMax.toFixed(2);
+  const method = (S.interp.fault_settings || {}).method || "Cached faults";
+  $("fault-cutoff-status").textContent = S.faultDirty ? "Preview only; Apply updates sticks and leads. Sticks hidden during preview." : method;
+  $("btn-apply-faults").disabled = !S.interp.ready || S.status.state === "running" || !S.faultDirty;
+}
+let faultPreviewTimer;
+$("fault-cutoff").oninput = (e) => {
+  S.faultMax = Number(e.target.value); S.faultDirty = S.faultMax !== S.faultSaved;
+  S.layers.faults = true; document.querySelector('#layers [data-layer="faults"]').classList.add("on");
+  syncFaultControls(); clearTimeout(faultPreviewTimer);
+  faultPreviewTimer = setTimeout(() => { updateSection(); updateMap(); }, 150);
+};
+$("btn-apply-faults").onclick = async () => {
+  try {
+    const r = await getJSON("/api/fault_settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ coherence_max: S.faultMax }) });
+    if (!r.ok) { note(r.msg); return; }
+    S.status = { state: "running" }; showProgress.keep = true; syncFaultControls(); pollStatus(); showProgress(await getJSON("/api/status"));
+  } catch (e) { note(e.message); }
+};
+
 async function loadState(first) {
   const st = await getJSON("/api/state");
   const hadVols = S.vols.length;
   S.vols = st.volumes; S.ref = st.ref; S.wells = st.wells || []; S.interp = st.interp || { ready: false }; S.project = st.project || {}; S.status = st.status || {};
   S.defaultDir = st.default_data_dir;
+  S.faultSaved = Number((S.interp.fault_settings || {}).coherence_max ?? 1);
+  if (S.status.state !== "running" || !S.faultDirty) { S.faultMax = S.faultSaved; S.faultDirty = false; }
+  syncFaultControls();
   if (!S.vols.find((v) => v.name === S.vol)) S.vol = S.ref;
   const sv = $("sel-vol"); sv.innerHTML = S.vols.map((v) => `<option value="${esc(v.name)}">${esc(v.label)}</option>`).join(""); if (S.vol) { sv.value = S.vol; $("sel-cmap").value = cmapFor(vol()); }
   pill("pill-data", S.vols.length ? "ok" : "", S.vols.length ? `${S.vols.length} volumes · ${S.wells.length} wells` : "No data yet");
@@ -509,6 +536,7 @@ function showProgress(s) {
   if (say.last !== $("prog-msg").textContent) { say.last = $("prog-msg").textContent; say(say.last); }
   if (s.state === "running") pill("pill-interp", "busy", "Interpreting…"); else if (s.state === "error") pill("pill-interp", "bad", "Run stopped");
   $("btn-run").disabled = s.state === "running";
+  $("btn-apply-faults").disabled = s.state === "running" || !S.interp.ready || !S.faultDirty;
 }
 let polling = false;
 async function pollStatus() {
@@ -523,7 +551,7 @@ async function pollStatus() {
       // new volumes are shown as they arrive, and the app becomes usable as soon as the briefing exists
       if (st.volumes.length !== nvol || (st.wells || []).length !== S.wells.length || (st.interp && st.interp.ready && !S.interp.ready)) {
         const first = st.interp && st.interp.ready && !S.interp.ready; polling = false; nvol = st.volumes.length; await loadState();
-        if (first) addBot("The measured interpretation is ready, so you can start asking questions now. I am still doing my own pass over the pictures (horizons, fault sticks, time slices); those results are added when it finishes.", true);
+        if (first) addBot("The measured interpretation is ready, including algorithmic fault sticks. You can start asking questions now. I am still reviewing horizons, time slices and logs; those results are added when it finishes.", true);
         return;
       }
     }
@@ -668,7 +696,7 @@ function renderAbout() {
       ${m.assistant_pass ? `<li><b>Assistant’s own pass:</b> ${esc(m.assistant_pass)}</li>` : `<li><b>Assistant’s own pass:</b> not finished yet</li>`}</ul>
     <div class="legend"><span>${evTag("", "measured from the data")}</span><span>${evTag("well", "from wells")}</span><span>${evTag("vis", "the assistant’s reading of a picture")}</span></div>
     <h4>Two interpreters, compared</h4><ul>${(k.second_horizons || []).map((p) => `<li>${evChip(p.evidence)} <b>${esc(p.gemma)}</b> (${esc(p.label || "")}): ${p.same_reflector ? `same reflector as ${esc(p.rgt)}; typical difference ${p.median_abs_ms} ms, worst tenth ${p.p90_abs_ms} ms` : esc(p.note || "no RGT counterpart")}</li>`).join("") || "<li>The assistant’s own horizons are added when its pass has finished.</li>"}</ul>
-    <h4>Named faults</h4><ul>${(k.faults || []).map((fa) => `<li>${evChip(fa.evidence)} <b>${esc(fa.id)}</b>: ${fa.trend ? "strikes " + esc(fa.trend) + ", " : ""}${fa.length_km ? fa.length_km + " km, " : ""}${fa.twt_top_ms}–${fa.twt_base_ms} ms${fa.throw_ms ? ", throw about " + Math.round(fa.throw_ms) + " ms" : ""}; assistant confirmed ${fa.sticks_confirmed} of ${fa.sticks_reviewed} sticks</li>`).join("") || "<li>none named yet</li>"}</ul>
+    <h4>Named faults</h4><ul>${(k.faults || []).map((fa) => `<li>${evChip(fa.evidence)} <b>${esc(fa.id)}</b>: ${fa.trend ? "strikes " + esc(fa.trend) + ", " : ""}${fa.length_km ? fa.length_km + " km, " : ""}${fa.twt_top_ms}–${fa.twt_base_ms} ms${fa.throw_ms ? ", throw about " + Math.round(fa.throw_ms) + " ms" : ""}; ${fa.sticks} algorithmic sticks, measured offset/fit checks; no Gemma</li>`).join("") || "<li>none named yet</li>"}</ul>
     <h4>Seismic facies</h4><ul>${(S.interp.facies || []).map((f) => `<li><span class="swatch" style="background:${S.interp.facies_colors[(f.facies - 1) % S.interp.facies_colors.length]}"></span><b>Facies ${f.facies}: ${esc(f.name || f.description)}</b> (${Math.round(f.share * 100)}%)${f.no_data ? "" : ` — ${esc(f.lithology || "")}${f.well_net_sand != null ? `, wells show ${Math.round(f.well_net_sand * 100)}% sand` : ""}. <i>Usually: ${esc(f.reading || "")}.</i>${f.gemma_name ? ` Assistant, from pictures: ${esc(f.gemma_name)}${f.gemma_setting ? " — " + esc(f.gemma_setting) : ""}${f.gemma_agrees === false ? " (disagrees with the rule-based name)" : ""}.` : ""}`}</li>`).join("")}</ul>
     <h4>Rock certainty, checked against the wells</h4>${rockTable(k.rock_certainty)}
     <h4>Well checks</h4><ul>${(k.calibration || []).map((c) => `<li>${esc(c.check)}: ${esc(c.verdict)}${c.correlation != null ? ` (r = ${c.correlation})` : ""}</li>`).join("") || "<li>none</li>"}${k.polarity && k.polarity.reading ? `<li>Polarity: ${esc(k.polarity.reading)}</li>` : ""}</ul>

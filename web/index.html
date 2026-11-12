@@ -48,6 +48,12 @@
         <button data-layer="leads" class="chip on">Leads</button>
         <button data-layer="similar" class="chip hidden" id="chip-similar">Look-alikes</button>
       </span>
+      <label title="Filter fault candidates by the existing 0–1 semblance/coherence volume. This is not FaultSSL probability or Pearson correlation. Lower values keep fewer candidates; 1 switches the filter off.">
+        Coherence &lt; <input id="fault-cutoff" class="slider" type="range" min="0" max="1" step="0.01" value="1" aria-label="Maximum coherence for fault candidates">
+        <output id="fault-cutoff-value" for="fault-cutoff">off</output>
+      </label>
+      <button id="btn-apply-faults" class="small ghost" title="Update fault sticks, leads and evidence from cached fault probabilities. RGT, facies, horizons and converted seismic are kept.">Apply to faults</button>
+      <span id="fault-cutoff-status" class="fault-status">Preview overlay; Apply updates sticks and leads.</span>
       <button class="ghost hidden" id="chat-open" type="button">Assistant</button>
     </div>
     <div class="panels">

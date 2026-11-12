@@ -215,15 +215,59 @@ def load_horizons(source="rgt"):
              "strength": float(d["strength"][k])} for k, n in enumerate(d["names"])]
 
 
-def stage_faults(force=False):
-    from . import faults
+def stage_faults(force=False, use_slurm=True, predict_only=False):
+    from . import faults, faultssl, rgt, sticks
     if (I / "faults.npy").exists() and not force:
         return
-    from . import rgt
     live = get_live()
-    fl, semb = faults.fault_likelihood(rgt.fill_dead(np.load(I / "seis.npy"), live), log=log, live=live)
+    previous = read_json(I / "faults.json", {}) or {}
+    cutoff = faults.validate_cutoff(config.FAULT_COHERENCE_MAX if config.FAULT_COHERENCE_MAX is not None
+                                   else previous.get("coherence_max", 1.0))
+    method = config.FAULT_METHOD
+    if method not in ("auto", "faultssl", "coherence"):
+        raise ValueError("Fault method must be auto, faultssl or coherence")
+    use_model = method == "faultssl" or (method == "auto" and (config.FAULTSSL_WEIGHTS.is_file() or (I / "faultssl.npy").exists()))
+    # Only the initial model prediction needs a GPU. Cutoff changes use its cached probabilities.
+    if use_model and not (I / "faultssl.npy").exists():
+        if not config.FAULTSSL_WEIGHTS.is_file():
+            raise FileNotFoundError(f"FaultSSL checkpoint missing: {config.FAULTSSL_WEIGHTS}. Run scripts/download_faultssl.py first.")
+        if use_slurm and shutil.which("sbatch") and not os.environ.get("SLURM_JOB_ID") and os.environ.get("COPILOT_NO_SLURM") != "1":
+            _slurm_job(["faults"])
+    seis = rgt.fill_dead(np.load(I / "seis.npy"), live)
+    coherence_new = not (I / "coherence.npy").exists()
+    if not coherence_new:
+        semb = np.load(I / "coherence.npy")
+    else:
+        semb = faults.semblance(seis)
+        semb[~live] = 1.0
+        np.save(I / "coherence.npy", semb)
+    if use_model:
+        if not (I / "faultssl.npy").exists():
+            prediction = faultssl.infer(seis, config.FAULTSSL_WEIGHTS, log=log)
+            prediction[~live] = 0
+            np.save(I / "faultssl.npy", (prediction * 255).astype(np.uint8))
+        if predict_only:
+            return  # The parent rebuilds sticks/results once, after the GPU prediction succeeds.
+        base = np.load(I / "faultssl.npy").astype(np.float32) / 255.0
+        source = "FaultSSL Precision First (pretrained TorchScript)"
+    else:
+        if (I / "faults_base.npy").exists() and previous.get("source") == "coherence":
+            base = np.load(I / "faults_base.npy").astype(np.float32) / 255.0
+        else:
+            base, _ = faults.fault_likelihood(seis, log=log, live=live)
+        source = "coherence discontinuity (FaultSSL not selected or checkpoint unavailable)"
+        log("Fault source: " + source)
+    if base.shape != semb.shape:
+        raise ValueError("Cached FaultSSL probabilities do not match this interpretation grid")
+    np.save(I / "faults_base.npy", (base * 255).astype(np.uint8))
+    fl = faults.apply_cutoff(base, semb, cutoff, live)
     np.save(I / "faults.npy", (fl * 255).astype(np.uint8))
     np.save(I / "semb.npy", (semb * 255).astype(np.uint8))
+    write_json(I / "faults.json", {"method": source, "source": "faultssl" if use_model else "coherence",
+                                  "coherence_max": cutoff, "stick_method": "algorithmic throw/fit tests; no Gemma"})
+    sticks.build(load_grid(), seis, fl, live, I, log=log)
+    if not coherence_new and (config.STORES / "Coherence.json").exists():
+        return  # A cutoff change does not alter the displayed coherence volume.
     try:        # show the coherence cube in the viewer's Volume list (black = neighbouring traces differ)
         store.register_derived("Coherence", "Coherence (black = break)", "coh", semb, load_grid(), cmap="gray",
                                lo=float(np.percentile(semb[::4, ::4, ::4], 2)), hi=1.0)
@@ -419,7 +463,7 @@ def _slurm_job(todo=("rgt", "sfm")):
         if state == "PENDING" and time.time() - t0 > wait_min * 60:
             subprocess.run(["scancel", jid])
             raise RuntimeError(f"no GPU became free within {wait_min:.0f} minutes")
-    if not all({"rgt": I / "rgt.npy", "sfm": I / "facies.npy"}[s].exists() for s in todo):
+    if not all({"rgt": I / "rgt.npy", "sfm": I / "facies.npy", "faults": I / "faultssl.npy"}[s].exists() for s in todo):
         tail = ""
         try:
             tail = Path(str(joblog).replace("%j", jid)).read_text()[-600:]
@@ -448,6 +492,8 @@ def run(stages=None, force=False, use_slurm=True, in_job=False, strict=False):
                 try:
                     if s == "rgt":
                         stage_rgt(force, allow_classical=not strict)
+                    elif s == "faults":
+                        stage_faults(force=True, use_slurm=False, predict_only=True)
                     else:
                         FUNCS[s](force)
                 except Exception as e:      # keep going: the other GPU step may still succeed
@@ -460,6 +506,9 @@ def run(stages=None, force=False, use_slurm=True, in_job=False, strict=False):
                     k += 1
                     want.append(stages[k])
                 run_gpu_stages(force, use_slurm, want)
+            elif s == "faults":
+                set_status(stage=s, message=STAGE_LABEL[s])
+                stage_faults(force, use_slurm=use_slurm)
             elif s in SOFT:
                 set_status(stage=s, message=STAGE_LABEL[s])
                 try:
@@ -520,9 +569,18 @@ def main():
     ap.add_argument("--stages", help="comma-separated subset of: " + ",".join(STAGES))
     ap.add_argument("--force", action="store_true", help="redo steps even if their results exist")
     ap.add_argument("--no-slurm", action="store_true", help="never submit a GPU job, run everything here")
+    ap.add_argument("--fault-method", choices=("auto", "faultssl", "coherence"), help="fault-likelihood source")
+    ap.add_argument("--fault-coherence-max", type=float, help="only retain faults where coherence is below this value (0..1; 1 = off)")
     ap.add_argument("--in-job", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--strict", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()
+    if a.fault_method is not None:
+        config.FAULT_METHOD = a.fault_method
+        os.environ["COPILOT_FAULT_METHOD"] = a.fault_method
+    if a.fault_coherence_max is not None:
+        from .faults import validate_cutoff
+        config.FAULT_COHERENCE_MAX = validate_cutoff(a.fault_coherence_max)
+        os.environ["COPILOT_FAULT_COHERENCE_MAX"] = str(config.FAULT_COHERENCE_MAX)
     if a.data or a.wells:
         set_project(a.data, wells_dir=a.wells)
     stages = [s.strip() for s in a.stages.split(",")] if a.stages else None

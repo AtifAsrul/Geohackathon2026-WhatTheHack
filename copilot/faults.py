@@ -3,6 +3,31 @@ import numpy as np
 from scipy.ndimage import gaussian_filter1d, label, uniform_filter
 
 
+def validate_cutoff(value):
+    value = float(value)
+    if not np.isfinite(value) or not 0 <= value <= 1:
+        raise ValueError("Coherence cutoff must be a finite number between 0 and 1")
+    return value
+
+
+def apply_cutoff(likelihood, coherence, cutoff=1.0, live=None):
+    """Keep candidates only where coherence < cutoff; 1 disables this optional filter.
+
+    Coherence is semblance (0..1), not Pearson correlation or model probability.
+    The strict comparison means a cutoff of 0.5 excludes coherence == 0.5.
+    """
+    cutoff = validate_cutoff(cutoff)
+    out = np.clip(np.asarray(likelihood, dtype=np.float32), 0, 1).copy()
+    if coherence.shape != out.shape:
+        raise ValueError("Fault likelihood and coherence must have matching shapes")
+    out[~np.isfinite(out) | ~np.isfinite(coherence)] = 0
+    if cutoff < 1:
+        out[coherence >= cutoff] = 0
+    if live is not None:
+        out[~live] = 0
+    return out
+
+
 def semblance(seis, lateral=3, vertical=9):
     """Coherence cube, 0..1: how alike a trace is to its neighbours (3 x 3 traces, 9 samples).
 

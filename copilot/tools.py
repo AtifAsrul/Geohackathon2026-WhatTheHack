@@ -131,7 +131,7 @@ def horizon_lines(axis, number, source="rgt"):
     return out
 
 
-def overlay(layer, axis, number):
+def overlay(layer, axis, number, fault_coherence_max=None):
     """2-D uint8 slice of an interpretation cube + the line-number / ms extent it covers."""
     g = grid()
     if g is None:
@@ -150,12 +150,26 @@ def overlay(layer, axis, number):
         ext_t = [float(g["times"][min(int(ct[0]), len(g["times"]) - 1)]), float(g["times"][min(int(ct[-1]), len(g["times"]) - 1)])]
         data = (np.clip(s, 0, 1) * 255).astype(np.uint8)
     else:
-        cb = cube({"faults": "faults", "facies": "facies", "rgt": "rgt"}[layer])
+        preview = layer == "faults" and fault_coherence_max is not None
+        cb = cube("faults_base") if preview else None
+        if cb is None:
+            cb = cube({"faults": "faults", "facies": "facies", "rgt": "rgt"}[layer])
         if cb is None:
             return None
         s = cb[g_index(il=number)] if axis == "i" else (cb[:, g_index(xl=number)] if axis == "x" else cb[:, :, g_index(twt=number)])
         s = np.asarray(s)
         data = (np.clip(s, 0, 1) * 255).astype(np.uint8) if layer == "rgt" else s.astype(np.uint8)
+        if preview:
+            from .faults import apply_cutoff
+            coh = cube("coherence")
+            if coh is None:
+                coh = cube("semb")
+            if coh is None:
+                raise ValueError("Coherence is unavailable; refresh the fault stage first")
+            cs = coh[g_index(il=number)] if axis == "i" else (coh[:, g_index(xl=number)] if axis == "x" else coh[:, :, g_index(twt=number)])
+            if coh.dtype == np.uint8:
+                cs = cs.astype(np.float32) / 255.0
+            data = (apply_cutoff(data.astype(np.float32) / 255.0, cs, fault_coherence_max) * 255).astype(np.uint8)
         ext_i = [int(g["ilines"][0]), int(g["ilines"][-1])]
         ext_x = [int(g["xlines"][0]), int(g["xlines"][-1])]
         ext_t = [float(g["times"][0]), float(g["times"][-1])]
@@ -949,8 +963,10 @@ def fault(fid):
         if f["id"].lower() == str(fid).lower():
             d = dict(f)
             sf = sticks_file()
-            d["sticks_reviewed"] = [{"line": f"{'inline' if s['axis'] == 'i' else 'crossline'} {s['line']}", "verdict": s.get("verdict"),
-                                     "why": s.get("why", ""), "throw_ms": s.get("throw_ms")}
+            d["stick_method"] = sf.get("method", "legacy cached picks")
+            d["stick_checks"] = [{"line": f"{'inline' if s['axis'] == 'i' else 'crossline'} {s['line']}", "verdict": s.get("verdict"),
+                                     "why": s.get("why", ""), "throw_ms": s.get("throw_ms"), "throw_fit": s.get("throw_fit"),
+                                     "reviewed_by": s.get("reviewed_by", "legacy")}
                                     for s in sf.get("sticks", []) if s.get("fault") == f["id"] and s.get("verdict") not in (None, "unreviewed")][:8]
             return d
     return {"error": f"no fault called {fid}", "available": [f["id"] for f in fs][:30]}

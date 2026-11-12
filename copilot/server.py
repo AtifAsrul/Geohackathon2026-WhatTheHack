@@ -82,6 +82,7 @@ def state():
                        "for": l["for"], "against": l["against"], "unknown": l["unknown"]} for l in k.get("leads", [])],
             "methods": k.get("methods"), "facies": k.get("facies"), "facies_colors": tools.FACIES_COLORS,
             "built": k.get("built"), "data_quality": k.get("data_quality", []),
+            "fault_settings": read_json(config.INTERP / "faults.json", {"coherence_max": 1.0, "method": "legacy coherence"}),
             "map_attrs": sorted({key.split("__")[1] for key in (tools.maps() or {})}),
             "map_attrs_by_hz": {hz: sorted(key.split("__")[1] for key in (tools.maps() or {}) if key.split("__")[0] == hz)
                                 for hz in {key.split("__")[0] for key in (tools.maps() or {})}},
@@ -183,7 +184,10 @@ async def do_import(req: Request):
 
 @app.post("/api/run")
 async def run(req: Request):
-    body = await req.json()
+    return _start_run(await req.json())
+
+
+def _start_run(body):
     p = _proc["p"]
     if p is not None and p.poll() is None:
         return {"ok": False, "msg": "A run is already in progress."}
@@ -197,11 +201,35 @@ async def run(req: Request):
         cmd.append("--force")
     if body.get("no_slurm"):
         cmd.append("--no-slurm")
+    if body.get("fault_coherence_max") is not None:
+        from .faults import validate_cutoff
+        try:
+            cutoff = validate_cutoff(body["fault_coherence_max"])
+        except (ValueError, TypeError):
+            raise HTTPException(400, "Coherence cutoff must be between 0 and 1")
+        cmd += ["--fault-coherence-max", str(cutoff)]
+    if body.get("fault_method") in ("faultssl", "coherence"):
+        cmd += ["--fault-method", body["fault_method"]]
     config.set_status(stage=(stages or pipeline.STAGES)[0], message="Starting", state="running", error=None, log=[],
                       stages=[{"id": s, "label": pipeline.STAGE_LABEL[s]} for s in (stages or pipeline.STAGES)], started=time.time())
-    logf = open(config.LOGS / "pipeline.log", "w")
-    _proc["p"] = subprocess.Popen(cmd, cwd=str(config.ROOT), stdout=logf, stderr=subprocess.STDOUT)
+    with open(config.LOGS / "pipeline.log", "w") as logf:
+        _proc["p"] = subprocess.Popen(cmd, cwd=str(config.ROOT), stdout=logf, stderr=subprocess.STDOUT)
     return {"ok": True}
+
+
+@app.post("/api/fault_settings")
+async def apply_fault_settings(req: Request):
+    body = await req.json()
+    if not (config.INTERP / "faults_base.npy").exists():
+        raise HTTPException(400, "Refresh the fault stage once to prepare cached probabilities before applying the slider.")
+    saved = read_json(config.INTERP / "faults.json", {}) or {}
+    if saved.get("source") == "faultssl" and not (config.INTERP / "faultssl.npy").exists():
+        raise HTTPException(400, "Cached FaultSSL probabilities are missing. Run the fault model stage before applying the cutoff.")
+    if body.get("coherence_max") is None:
+        raise HTTPException(400, "Choose a coherence cutoff first")
+    return _start_run({"stages": ["faults", "leads", "knowledge", "dossier"],
+                       "fault_coherence_max": body["coherence_max"], "fault_method": saved.get("source", "coherence"),
+                       "no_slurm": True})
 
 
 # ------------------------------------------------------------------ slices
@@ -232,8 +260,11 @@ def hlines(axis: str, number: float, source: str = "rgt"):
 
 
 @app.get("/api/overlay")
-def get_overlay(layer: str, axis: str, number: float):
-    r = tools.overlay(layer, axis, number)
+def get_overlay(layer: str, axis: str, number: float, fault_coherence_max: float = None):
+    try:
+        r = tools.overlay(layer, axis, number, fault_coherence_max=fault_coherence_max)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if r is None:
         raise HTTPException(404, "not available")
     data, ext = r

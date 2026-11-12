@@ -31,8 +31,9 @@ shown to you. The survey is anonymised: you do not know the basin, country, form
 KINDS OF EVIDENCE - keep them apart when you argue
 - MEASURED: numbers computed from the seismic volumes (horizon times, closures, amplitudes, sand probability, coherence).
 - WELLS: what the logs show, and checks of the seismic against the logs (well ties, rock certainty). Strongest evidence.
-- ASSISTANT'S OWN READINGS: what a vision model (you, in an earlier pass) saw in pictures: time-slice features, fault-stick \
-votes, the second-opinion horizons G1, G2... These are interpretations, weaker than measurements. Say "the visual \
+- ASSISTANT'S OWN READINGS: what a vision model (you, in an earlier pass) saw in pictures: time-slice features and \
+the second-opinion horizons G1, G2... Fault sticks are algorithmic measured results; Gemma never selects or draws them. \
+These visual readings are interpretations, weaker than measurements. Say "the visual \
 reading suggests" and quote the measured check that comes with each.
 - Two horizon sets exist: H# from RGT-Est (used for the traps) and G# picked on a net of lines. Where they agree the \
 structure is robust; where they differ, say so.

@@ -166,19 +166,36 @@ def build():
     if pol and pol.get("reading"):
         pol["evidence"] = ev(f"Polarity from the wells: {pol['reading']}.", None, "well-tie", "well-check")
 
+    # Fault geometry is produced by the measured fault stage, independently of Gemma.
+    fm = read_json(I / "faults.json", {}) or {}
+    cutoff = fm.get("coherence_max", 1.0)
+    methods["faults"] = fm.get("method", "legacy coherence discontinuity") + (
+        f"; coherence < {cutoff:.2f}" if cutoff < 1 else "; coherence filter off") + "; algorithmic sticks, no Gemma"
+    faults = []
+    for fa in read_json(I / "fault_surfaces.json", []) or []:
+        txt = f"Fault {fa['id']}: " + (f"strikes {fa['trend']}, " if fa.get("trend") else "") \
+            + (f"{fa['length_km']} km long, " if fa.get("length_km") else "") + f"cuts {fa['twt_top_ms']}-{fa['twt_base_ms']} ms" \
+            + (f", measured throw about {fa['throw_ms']:.0f} ms" if fa.get("throw_ms") else "") \
+            + f"; {fa['sticks']} algorithmic sticks; accepted using likelihood and measured reflector offset/fit, without Gemma"
+        fa["evidence"] = ev(txt + ".", fa["where"], "faults", "measured")
+        faults.append(fa)
+
     # ---------------- the assistant's own pass (only present after the 'ai' step)
     done = read_json(I / "ai_done.json")
     facies = parts.get("facies", [])
-    faults, ghz, readings = [], [], []
+    ghz, readings = [], []
     leads = parts.get("leads", [])
     if done:
+        if cutoff != done.get("fault_coherence_max", 1.0) or fm.get("source") != done.get("fault_source"):
+            quality.append("Fault settings changed after the cached assistant pass. Its visual readings are retained from the earlier run; "
+                           "fault sticks and lead fault scores use the current settings")
         st = done.get("steps", {})
         methods["assistant_pass"] = (f"{done['model']} looked at pictures and reviewed facies names, well logs, leads, time slices, "
-                                     f"fault sticks and horizons ({done['requests']['asked']} questions, {done['minutes']} min)"
+                                     f"and horizons ({done['requests']['asked']} questions, {done['minutes']} min)"
                                      if done.get("reachable") else "the model could not be reached; the app's own choices were used")
         if not done.get("reachable"):
-            quality.append("The assistant's own pass could not reach the model: fault sticks and the second set of horizons are the "
-                           "app's own choices and were not reviewed by the assistant")
+            quality.append("The assistant's own pass could not reach the model: the second set of horizons is the "
+                           "app's own choice and was not reviewed by the assistant")
         rq = done.get("requests") or {}
         if done.get("reachable") and rq.get("failed"):
             quality.append(f"{rq['failed']} of {rq['asked']} questions to the assistant in its own pass got no usable answer; "
@@ -189,8 +206,6 @@ def build():
             if isinstance(s, dict) and s.get("error"):
                 quality.append(f"Assistant's pass, {name}: not finished ({s['error']})")
         if done.get("reachable"):
-            if (st.get("sticks") or {}).get("sticks") and not (st.get("sticks") or {}).get("reviewed_lines"):
-                quality.append("The assistant gave no usable verdict on the fault sticks: they are the app's own choice, not reviewed")
             if (st.get("horizons") or {}).get("horizons") and not (st.get("horizons") or {}).get("selection_reviewed"):
                 quality.append("The assistant gave no usable choice of horizons: the second set of horizons (G#) follows the app's "
                                "strongest continuous reflectors, not reviewed")
@@ -218,25 +233,6 @@ def build():
                     f"XL {ft['xl_range'][0]}-{ft['xl_range'][1]}" + (f", trending {ft['compass']}" if ft.get("compass") else "")
                     + f" - \"{ft['why']}\" (confidence {ft['confidence']}). Measured check: {chk}.", ft["where"], "slice", "assistant-visual")
                 readings.append(dict(ft, twt=r["twt"]))
-        sf = read_json(I / "sticks.json") or {}
-        dec = sf.get("decoys") or {}
-        for fa in read_json(I / "fault_surfaces.json", []) or []:
-            txt = f"Fault {fa['id']}: " + (f"strikes {fa['trend']}, " if fa.get("trend") else "") \
-                + (f"{fa['length_km']} km long, " if fa.get("length_km") else "") + f"cuts {fa['twt_top_ms']}-{fa['twt_base_ms']} ms" \
-                + (f", throw about {fa['throw_ms']:.0f} ms" + (f" down to the {fa['downthrown_towards']}" if fa.get("downthrown_towards") else "") if fa.get("throw_ms") else "") \
-                + f"; picked as sticks on {fa['sticks']} lines"
-            if fa["sticks_reviewed"]:
-                txt += f", the assistant judged {fa['sticks_confirmed']} of the {fa['sticks_reviewed']} it looked at to be a fault"
-            else:
-                txt += ", not reviewed by the assistant"
-            fa["evidence"] = ev(txt + ".", fa["where"], "faults", "measured")
-            faults.append(fa)
-        if dec.get("shown"):
-            ev(f"Check on the assistant's fault votes: {dec['rejected']} of {dec['shown']} deliberately wrong sticks (drawn where nothing "
-               f"is faulted) were rejected. " + ("Its votes were used." if dec.get("votes_used") else "That is too few, so its votes were NOT used."),
-               None, "check", "comparison")
-            if not dec.get("votes_used"):
-                quality.append("The assistant accepted most decoy fault sticks, so its fault votes were ignored and the app's own test decides")
         pk = read_json(I / "picks_gemma.json") or {}
         cmp_ = read_json(I / "hz_compare.json") or {}
         pinfo = {h["name"]: h for h in pk.get("horizons", [])}
@@ -401,12 +397,12 @@ def briefing(k, max_leads=10, compact=False):
         if (k.get("polarity") or {}).get("evidence"):
             L.append(f"- polarity: {k['polarity']['reading']} [{k['polarity']['evidence']}]")
     if k.get("faults"):
-        L.append("\nNAMED FAULTS (fault sticks picked on every 8th line, reviewed by the assistant, joined into surfaces)")
+        L.append("\nNAMED FAULTS (algorithmic sticks picked on every 8th line, measured offset/fit checks, no Gemma)")
         for fa in k["faults"][:(6 if compact else 14)]:
             L.append(f"- {fa['id']}: " + (f"strike {fa['trend']}, " if fa.get("trend") else "") + (f"{fa['length_km']} km, " if fa.get("length_km") else "")
                      + f"{fa['twt_top_ms']}-{fa['twt_base_ms']} ms" + (f", throw ~{fa['throw_ms']:.0f} ms" if fa.get("throw_ms") else "")
                      + (f" down to the {fa['downthrown_towards']}" if fa.get("downthrown_towards") else "")
-                     + f", near IL {fa['where']['il']} / XL {fa['where']['xl']}; assistant confirmed {fa['sticks_confirmed']}/{fa['sticks_reviewed']} sticks [{fa['evidence']}]")
+                     + f", near IL {fa['where']['il']} / XL {fa['where']['xl']}; algorithmic sticks, measured throw/fit checks [{fa['evidence']}]")
     if k.get("second_horizons"):
         L.append("\nSECOND-OPINION HORIZONS (G#: reflectors chosen from a picture, tracked along a net of lines, independent of RGT)")
         for p in k["second_horizons"]:
