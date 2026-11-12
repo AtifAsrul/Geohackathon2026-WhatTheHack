@@ -1,9 +1,7 @@
 /* Exploration Copilot, styled to copilot-style-guide. Every colour, radius, face and easing comes from css/tokens.css.
    Layout is unchanged; only controls, colours and type are restyled. */
 :root {
-  /* old names kept so nothing that refers to them breaks; each is a token now */
-  --panel: var(--bg); --panel2: var(--surface); --line: var(--hairline); --muted: var(--text-3);
-  --good: var(--discovery); --bad: var(--dry); --accent2: var(--warn);
+  --muted: var(--text-3);          /* an old name the app's own markup still uses */
   --ev-vis: #c4a2ec;               /* the greeting calls the assistant's own readings purple; the guide has no purple, so this one is local */
   font-family: var(--font); font-size: 14px;
 }
@@ -97,7 +95,6 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: non
 input[type=checkbox]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 textarea::placeholder, input::placeholder { color: var(--text-3); }
 .sep { width: 1px; height: 20px; background: var(--hairline); }
-/* layer switches: on is a plain pill with the brighter edge, off is struck through */
 /* layer switches: a dot says on or off at a glance (filled orange when on, an empty ring when off) */
 .chip { border-radius: 8px; padding: 4px 12px; font-size: 0.8125rem; color: var(--text-2); background: transparent; border-color: transparent; font-weight: 400; display: inline-flex; align-items: center; gap: 8px; }
 .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--text-3); transition: background-color 150ms var(--ease), box-shadow 150ms var(--ease); }

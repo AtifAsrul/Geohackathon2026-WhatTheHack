@@ -936,7 +936,11 @@ for (const list of document.querySelectorAll('[role="tablist"]')) {
 }
 const untitle = (root) => { for (const el of root.querySelectorAll("[title]")) { hint(el, el.title); el.removeAttribute("title"); } };   // the page's own hints show in the quiet tip, not the browser's tooltip
 untitle(document.body);
-new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1) { if (n.hasAttribute("title")) { hint(n, n.title); n.removeAttribute("title"); } untitle(n); } }).observe(document.body, { childList: true, subtree: true });
+const unhint = (n) => { for (const el of [n, ...n.querySelectorAll("[aria-describedby]")]) if (el._desc) { el._desc.remove(); el._desc = null; } };   // a removed element takes its hidden hint text with it
+new MutationObserver((ms) => { for (const m of ms) {
+  for (const n of m.removedNodes) if (n.nodeType === 1 && !n.isConnected) unhint(n);
+  for (const n of m.addedNodes) if (n.nodeType === 1) { if (n.hasAttribute("title")) { hint(n, n.title); n.removeAttribute("title"); } untitle(n); }
+} }).observe(document.body, { childList: true, subtree: true });
 if (document.fonts) document.fonts.ready.then(() => { sec.draw(); map.draw(); logs.draw(); });   // canvas text picks up Geist once it has loaded
 hint($("btn-similar"), "Find other places whose seismic looks like the crosshair spot");
 hint($("btn-explain"), "Ask the assistant about the crosshair spot");
