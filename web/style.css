@@ -34,19 +34,19 @@ header { display: flex; align-items: center; gap: 18px; padding: 8px 14px; backg
 .pill.ok { color: var(--text); }
 .actions { display: flex; gap: 8px; }
 
-/* buttons: one pill shape for every plain button, the light primary for the one main action */
+/* buttons, three levels: orange primary (one per area), grey secondary, and toggles that are quiet when off */
 button { cursor: pointer; border-radius: 8px; border: 1px solid var(--pill-edge); background: var(--pill); padding: 4px 12px; min-height: 32px; font-size: 0.8125rem; font-weight: 500;
   transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease), opacity 150ms var(--ease), transform 150ms ease-out; }
 button:active:not(:disabled) { transform: scale(0.97); }
 button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--btn); border-color: transparent; color: var(--btn-ink); font-weight: 500; min-height: var(--control); padding: 0 14px; border-radius: var(--r-m); }
+button.primary { background: var(--solid); border-color: transparent; color: var(--solid-ink); font-weight: 500; min-height: var(--control); padding: 0 14px; border-radius: var(--r-m); }
 button.primary:active:not(:disabled) { transform: scale(0.96); }
 button.ghost { background: var(--pill); }
 button.small { padding: 4px 12px; font-size: 0.8125rem; }
 button.mini { padding: 0; min-width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-2); }
 @media (hover: hover) {
   button:hover:not(:disabled) { background: var(--pill-hover); border-color: var(--pill-edge-hover); }
-  button.primary:hover:not(:disabled) { background: var(--btn); border-color: transparent; opacity: 0.9; }
+  button.primary:hover:not(:disabled) { background: var(--grad-2); border-color: transparent; }
 }
 
 /* theme switch: a half-filled circle, 36px, like the guide's icon button */
@@ -54,7 +54,9 @@ button.icon-btn { width: var(--control); height: var(--control); padding: 0; bor
 @media (hover: hover) { button.icon-btn:hover:not(:disabled) { background: var(--raised); border-color: transparent; } }
 html.no-transitions *, html.no-transitions *::before, html.no-transitions *::after { transition: none !important; }
 
-#progress { background: var(--bg); border-bottom: 1px solid var(--hairline); padding: 8px 14px; }
+#progress { background: var(--bg); border-bottom: 1px solid var(--hairline); padding: 8px 14px; position: relative; }
+/* while a run is going: the brand gradient as one thin line along the bottom of the bar */
+#progress.running::after { content: ""; position: absolute; inset-inline: 0; bottom: -1px; height: 2px; background: var(--brand-gradient); }
 .prog-steps { display: flex; gap: 6px; flex-wrap: wrap; }
 .prog-steps span { font-size: 0.75rem; padding: 2px 10px; border-radius: 8px; border: 1px solid var(--pill-edge); background: var(--pill); color: var(--text-3); }
 .prog-steps span.done { color: var(--text-2); }
@@ -64,6 +66,11 @@ html.no-transitions *, html.no-transitions *::before, html.no-transitions *::aft
 .prog-msg { margin-top: 6px; color: var(--text-3); font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 main { flex: 1; display: flex; min-height: 0; }
+/* show / hide panels from the header: a hidden panel gives its room to the others; one that comes back fades in */
+main.no-section #p-section, main.no-map #p-map { display: none; }
+main.no-map #p-section { border-right: 0; }
+#p-section, #p-map, #side { animation: fade-in 150ms var(--ease); }
+@keyframes fade-in { from { opacity: 0; } }
 #viewer { flex: 1.75; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--hairline); background: var(--bg); }
 #side { flex: 1; min-width: 360px; max-width: 620px; display: flex; flex-direction: column; background: var(--surface); position: relative; }
 
@@ -91,8 +98,11 @@ input[type=checkbox]:focus-visible { outline: 2px solid var(--accent); outline-o
 textarea::placeholder, input::placeholder { color: var(--text-3); }
 .sep { width: 1px; height: 20px; background: var(--hairline); }
 /* layer switches: on is a plain pill with the brighter edge, off is struck through */
-.chip { border-radius: 8px; padding: 4px 12px; font-size: 0.8125rem; color: var(--text-3); background: transparent; border-color: transparent; text-decoration: line-through; font-weight: 400; }
-.chip.on { color: var(--text); background: var(--pill); border-color: var(--pill-edge-hover); text-decoration: none; font-weight: 500; }
+/* layer switches: a dot says on or off at a glance (filled orange when on, an empty ring when off) */
+.chip { border-radius: 8px; padding: 4px 12px; font-size: 0.8125rem; color: var(--text-2); background: transparent; border-color: transparent; font-weight: 400; display: inline-flex; align-items: center; gap: 8px; }
+.chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--text-3); transition: background-color 150ms var(--ease), box-shadow 150ms var(--ease); }
+.chip.on { color: var(--text); background: var(--pill); border-color: var(--pill-edge); font-weight: 500; }
+.chip.on::before { background: var(--solid); box-shadow: none; }
 .layers { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 #fault-cutoff { width: 120px; }
 #fault-cutoff-value { min-width: 30px; font: 500 0.75rem var(--mono); font-variant-numeric: tabular-nums; color: var(--text-2); }
@@ -106,6 +116,16 @@ textarea::placeholder, input::placeholder { color: var(--text-3); }
 /* tab rows: separate pills with a 4px gap; the selected one is the orange pill */
 .tabs { display: inline-flex; gap: 4px; }
 .tabs button { padding: 4px 12px; color: var(--text-2); }
+/* small tab groups and the panel toggles sit in one grey track; the chosen one is the orange pill */
+.tabs:not(.big), .view-toggles { gap: 2px; padding: 2px; background: var(--pill); border-radius: var(--r-m); }
+.tabs:not(.big) button, .view-toggles button { min-height: 28px; background: transparent; border-color: transparent; }
+.view-toggles { display: inline-flex; }
+.view-toggles button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; color: var(--text-2); }
+.view-toggles button svg { flex: none; }
+.view-toggles button[aria-pressed="true"] { background: var(--pill-on); border-color: var(--pill-on-edge); color: var(--pill-on-ink); }
+@media (hover: hover) { .tabs:not(.big) button:not(.on):hover:not(:disabled), .view-toggles button[aria-pressed="false"]:hover:not(:disabled) { background: var(--pill-hover); } }
+@media (hover: hover) { .view-toggles button[aria-pressed="true"]:hover:not(:disabled) { background: var(--pill-on-hover); border-color: var(--pill-on-edge); } }
+@media (max-width: 1280px) { .view-toggles button span { display: none; } .view-toggles button { padding: 4px 8px; } }
 .tabs button.on { background: var(--pill-on); border-color: var(--pill-on-edge); color: var(--pill-on-ink); }
 @media (hover: hover) { .tabs button.on:hover { background: var(--pill-on-hover); border-color: var(--pill-on-edge); } }
 .tabs.big { display: flex; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--hairline); align-items: center; }

@@ -438,6 +438,7 @@ if (window.ResizeObserver) { const ro = new ResizeObserver(() => { sec.resize();
 // jump to a place: {il, xl, twt, horizon, vol(role), axis, volrole, layer, map:{horizon, attr}}
 function go(w) {
   if (!w) return;
+  if (w.well || w.map || w.mapmode || w.horizon) reveal("map"); if (w.axis) reveal("section");   // a jump never lands in a hidden view
   const role = w.vol || w.volrole;
   if (role) { const v = S.vols.find((q) => q.role === role || q.name === role); if (v) { S.vol = v.name; $("sel-vol").value = v.name; $("sel-cmap").value = cmapFor(v); } }
   if (w.axis && w.axis !== S.axis) { S.axis = w.axis; document.querySelectorAll("#tabs-axis button").forEach((b) => b.classList.toggle("on", b.dataset.axis === w.axis)); sec.view = null; }
@@ -471,7 +472,7 @@ function pill(id, cls, text) { const p = $(id); p.className = "pill " + cls; p.q
 
 function syncFaultControls() {
   $("fault-cutoff").value = S.faultMax;
-  $("fault-cutoff").style.setProperty("--fill", S.faultMax * 100 + "%");
+  $("fault-cutoff").style?.setProperty("--fill", S.faultMax * 100 + "%");   // the orange part of the track
   $("fault-cutoff-value").textContent = S.faultMax >= 1 ? "off" : S.faultMax.toFixed(2);
   const method = (S.interp.fault_settings || {}).method || "Cached faults";
   $("fault-cutoff-status").textContent = S.faultDirty ? "Preview only; Apply updates sticks and leads. Sticks hidden during preview." : method;
@@ -529,7 +530,7 @@ async function loadState(first) {
 function showProgress(s) {
   const box = $("progress"); if (!s || !s.state || (s.state === "done" && !showProgress.keep)) { box.classList.add("hidden"); return; }
   if (s.state === "running") showProgress.keep = true;
-  box.classList.remove("hidden");
+  box.classList.remove("hidden"); box.classList.toggle("running", s.state === "running");
   const ids = (s.stages || []).map((q) => q.id), cur = ids.indexOf(s.stage);
   $("prog-steps").innerHTML = (s.stages || []).map((q, i) => `<span class="${s.state === "done" || i < cur ? "done" : i === cur ? (s.state === "error" ? "fail" : "now") : ""}">${s.state === "done" || i < cur ? '<i class="tick">✓</i> ' : ""}${esc(q.label)}</span>`).join("");
   $("prog-msg").textContent = s.state === "error" ? "Stopped: " + (s.error || s.message || "") : s.state === "done" ? "Finished. You can close this bar by reloading the page." : (s.message || "");
@@ -624,10 +625,20 @@ function setChatWidth(w, save) {
 }
 function setChatOpen(open) {
   document.querySelector("main").classList.toggle("no-chat", !open);
-  $("chat-open").classList.toggle("hidden", open); saveChat({ closed: !open });
+  $("show-chat").setAttribute("aria-pressed", open); saveChat({ closed: !open });
 }
-$("chat-close").onclick = () => { setChatOpen(false); $("chat-open").focus(); };
-$("chat-open").onclick = () => { setChatOpen(true); $("chat-input").focus(); };
+$("chat-close").onclick = () => { setChatOpen(false); $("show-chat").focus(); };
+$("show-chat").onclick = () => { const open = $("show-chat").getAttribute("aria-pressed") !== "true"; setChatOpen(open); if (open) $("chat-input").focus(); };
+// show or hide the section and the map view; one of the two always stays, the other takes its room
+function setViewShown(which, shown, restoring) {
+  const main = document.querySelector("main"), other = which === "section" ? "map" : "section";
+  if (!shown && main.classList.contains("no-" + other)) { note("One view stays on screen. Show the other view first."); return; }
+  main.classList.toggle("no-" + which, !shown); $("show-" + which).setAttribute("aria-pressed", shown);
+  saveChat({ [which === "section" ? "noSection" : "noMap"]: !shown });
+  if (!restoring) { sec.resize(); map.resize(); logs.resize(); }   // reading the size forces layout, so the canvases fit at once (on load, loadState sizes them)
+}
+function reveal(which) { if (document.querySelector("main").classList.contains("no-" + which)) setViewShown(which, true); }
+for (const which of ["section", "map"]) $("show-" + which).onclick = () => setViewShown(which, $("show-" + which).getAttribute("aria-pressed") !== "true");
 (() => {
   const g = $("chat-grip"), side = $("side"); let start = null;
   g.addEventListener("pointerdown", (e) => { if (e.button !== 0) return; start = { x: e.clientX, w: side.getBoundingClientRect().width }; g.setPointerCapture(e.pointerId); g.classList.add("dragging"); document.body.classList.add("resizing"); e.preventDefault(); });
@@ -642,6 +653,7 @@ $("chat-open").onclick = () => { setChatOpen(true); $("chat-input").focus(); };
     e.preventDefault(); e.stopPropagation();
   });
   const p = chatPrefs(); if (p.width) setChatWidth(p.width); if (p.closed) setChatOpen(false);
+  if (p.noSection) setViewShown("section", false, true); else if (p.noMap) setViewShown("map", false, true);
   window.addEventListener("resize", () => { const q = chatPrefs(); if (q.width) setChatWidth(q.width); });
 })();
 function renderLeads() {
@@ -677,7 +689,7 @@ function renderWells() {
         ${ex[w.name] ? `<div class="sub" style="margin-top:6px">Left out of the rock-certainty check: ${esc(ex[w.name])}</div>` : ""}
         <div class="row">${w.has && w.has.logs ? `<button class="small ghost" data-logs="${esc(w.name)}">Show logs</button>` : ""}${w.il != null ? `<button class="small ghost" data-gowell="${esc(w.name)}">Go to well</button>` : ""}${S.interp.ready ? `<button class="small ghost" data-askwell="${esc(w.name)}">Explain</button>` : ""}</div></div>`;
     }).join("") + (S.vols.length ? `<div class="row"><button class="small ghost" id="btn-rewells" title="Read the well files again and redo the well ties and leads; the seismic steps are kept">Read the wells again</button></div>` : "");
-  box.querySelectorAll("[data-logs]").forEach((b) => (b.onclick = () => { applyMapMode("logs"); logs.resize(); showWell(b.dataset.logs); }));
+  box.querySelectorAll("[data-logs]").forEach((b) => (b.onclick = () => { reveal("map"); applyMapMode("logs"); logs.resize(); showWell(b.dataset.logs); }));
   box.querySelectorAll("[data-gowell]").forEach((b) => (b.onclick = () => { const w = S.wells.find((q) => q.name === b.dataset.gowell); go({ il: w.il, xl: w.xl }); }));
   box.querySelectorAll("[data-askwell]").forEach((b) => (b.onclick = () => { showSide("chat"); ask(`Interpret well ${b.dataset.askwell}: what do its logs show, where is the best reservoir, is there any sign of hydrocarbons, and how does it tie to the seismic horizons?`); }));
   if ($("btn-rewells")) $("btn-rewells").onclick = () => runStages(["wells", "calibrate", "leads", "knowledge", "dossier"]);
@@ -911,6 +923,7 @@ $("btn-similar").onclick = async () => {
 };
 
 // ------------------------------------------------------------------ tabs for assistive tech, quiet hints, the navigate fold
+for (const c of document.querySelectorAll("#layers .chip")) { const sync = () => c.setAttribute("aria-pressed", c.classList.contains("on")); sync(); new MutationObserver(sync).observe(c, { attributes: true, attributeFilter: ["class"] }); }
 for (const list of document.querySelectorAll('[role="tablist"]')) {
   const tabs = [...list.querySelectorAll('[role="tab"]')];
   const sync = () => tabs.forEach((t) => { const on = t.classList.contains("on"); t.setAttribute("aria-selected", on); t.tabIndex = on ? 0 : -1; });
