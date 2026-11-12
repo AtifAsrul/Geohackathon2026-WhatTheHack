@@ -1,6 +1,7 @@
 /* Exploration Copilot - viewer + chat. Plain JavaScript, no build step. */
 "use strict";
 const $ = (id) => document.getElementById(id);
+const token = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const S = {
   vols: [], vol: null, ref: null, il: null, xl: null, twt: null, axis: "i", mapMode: "slice",
   horizon: null, attr: "time", cmaps: {}, gain: 1,
@@ -141,17 +142,29 @@ class Panel {
     if (this.onDraw) this.onDraw(c, this);
     c.restore();
     // axes
-    c.fillStyle = "#8fa1af"; c.strokeStyle = "#2a3640"; c.font = "11px Segoe UI, sans-serif"; c.lineWidth = 1;
+    c.fillStyle = token("--text-3"); c.strokeStyle = token("--hairline-strong"); c.font = "11px " + token("--mono"); c.lineWidth = 1;
     const ticks = (a, b, n) => { const span = Math.abs(b - a), raw = span / n, p = Math.pow(10, Math.floor(Math.log10(raw))), s = [1, 2, 5, 10].map((q) => q * p).find((q) => q >= raw) || raw; const out = []; for (let t = Math.ceil(Math.min(a, b) / s) * s; t <= Math.max(a, b); t += s) out.push(t); return out; };
     c.textAlign = "center"; c.textBaseline = "bottom";
     for (const t of ticks(this.view.h0, this.view.h1, Math.max(3, this.pw() / 90))) { const x = this.X(t); c.fillText(Math.round(t), x, this.m.t - 3); c.beginPath(); c.moveTo(x, this.m.t - 2); c.lineTo(x, this.m.t); c.stroke(); }
     c.textAlign = "right"; c.textBaseline = "middle";
     for (const t of ticks(this.view.v0, this.view.v1, Math.max(3, this.ph() / 60))) { const y = this.Y(t); c.fillText(Math.round(t), this.m.l - 5, y); c.beginPath(); c.moveTo(this.m.l - 3, y); c.lineTo(this.m.l, y); c.stroke(); }
     c.save(); c.translate(11, this.m.t + this.ph() / 2); c.rotate(-Math.PI / 2); c.textAlign = "center"; c.fillText(this.vlabel || "", 0, 0); c.restore();
-    c.textAlign = "right"; c.textBaseline = "bottom"; c.fillStyle = "#5f7180"; c.fillText(this.hlabel || "", this.w - 6, this.h - 4);
+    c.textAlign = "right"; c.textBaseline = "bottom"; c.fillStyle = token("--text-3"); c.fillText(this.hlabel || "", this.w - 6, this.h - 4);
   }
 }
 const sec = new Panel($("cv-section")), map = new Panel($("cv-map"));
+
+// the crosshair: a dark halo first so it reads on any colours, then a dashed orange line and a ring where the lines cross
+function drawCrosshair(c, p, x, y) {
+  const shade = token("--map-shade"), ink = token("--solid");      // same in both themes: it sits on the picture, not the page
+  const lines = () => { c.beginPath(); c.moveTo(x, p.m.t); c.lineTo(x, p.h); c.moveTo(p.m.l, y); c.lineTo(p.w, y); c.stroke(); };
+  c.save(); c.lineCap = "butt";
+  c.setLineDash([]); c.strokeStyle = shade; c.lineWidth = 2.5; lines();
+  c.setLineDash([6, 4]); c.strokeStyle = ink; c.lineWidth = 1; lines();
+  c.setLineDash([]); c.strokeStyle = shade; c.lineWidth = 2.5; c.beginPath(); c.arc(x, y, 5, 0, 2 * Math.PI); c.stroke();
+  c.strokeStyle = ink; c.lineWidth = 1; c.beginPath(); c.arc(x, y, 5, 0, 2 * Math.PI); c.stroke();
+  c.restore();
+}
 
 // ------------------------------------------------------------------ display range
 function range(v) {
@@ -159,7 +172,7 @@ function range(v) {
   if (s.bipolar) { const c = Math.max(Math.abs(s.lo), Math.abs(s.hi)) / S.gain; return [-c, c]; }
   const mid = (s.lo + s.hi) / 2, half = (s.hi - s.lo) / 2 / S.gain; return [mid - half, mid + half];
 }
-const cmapFor = (v) => S.cmaps[v.name] || v.cmap || (v.stats.bipolar ? "gray" : "viridis");
+const cmapFor = (v) => S.cmaps[v.name] || (v.cmap === "seismic" ? "seismic" : "gray");      // seismic images are Grey or Red / blue only
 
 // ------------------------------------------------------------------ section
 async function updateSection() {
@@ -228,9 +241,7 @@ sec.onDraw = (c, p) => {
     }
   }
   // crosshair
-  c.strokeStyle = "rgba(0,255,255,.85)"; c.lineWidth = 1; c.setLineDash([5, 4]);
-  const x = p.X(S.axis === "i" ? S.xl : S.il), y = p.Y(S.twt);
-  c.beginPath(); c.moveTo(x, p.m.t); c.lineTo(x, p.h); c.moveTo(p.m.l, y); c.lineTo(p.w, y); c.stroke(); c.setLineDash([]);
+  drawCrosshair(c, p, p.X(S.axis === "i" ? S.xl : S.il), p.Y(S.twt));
 };
 sec.onPick = (h, t) => setPos(S.axis === "i" ? { xl: h, twt: t } : { il: h, twt: t });
 sec.onStep = (d) => stepLine(d);
@@ -311,8 +322,7 @@ map.onDraw = (c, p) => {
     c.fillStyle = "#111"; c.strokeStyle = "#ffe14d"; c.lineWidth = 2; c.beginPath(); c.arc(x, y, 4.5, 0, 6.3); c.fill(); c.stroke();
     c.fillStyle = "#ffe14d"; c.fillText(w.name, x + 8, y);
   }
-  c.strokeStyle = "rgba(0,255,255,.85)"; c.lineWidth = 1; c.setLineDash([5, 4]);
-  const x = p.X(S.xl), y = p.Y(S.il); c.beginPath(); c.moveTo(x, p.m.t); c.lineTo(x, p.h); c.moveTo(p.m.l, y); c.lineTo(p.w, y); c.stroke(); c.setLineDash([]);
+  drawCrosshair(c, p, p.X(S.xl), p.Y(S.il));
   // north arrow
   const a = (refVol() || {}).affine;
   if (a) {
@@ -357,6 +367,7 @@ function syncControls() {
   const lines = S.axis === "i" ? v.ilines : v.xlines, cur = S.axis === "i" ? S.il : S.xl;
   $("line-num").value = cur; $("line-slider").max = lines.length - 1; $("line-slider").value = nearestIdx(lines, cur);
   $("time-num").value = Math.round(S.twt); $("time-slider").max = v.samples.length - 1; $("time-slider").value = nearestIdx(v.samples, S.twt);
+  for (const id of ["line-slider", "time-slider"]) { const el = $(id); el.style.setProperty("--fill", (+el.max > 0 ? (+el.value / +el.max) * 100 : 0) + "%"); }
 }
 function stepLine(d) { const v = refVol(); if (!v) return; const lines = S.axis === "i" ? v.ilines : v.xlines; const i = Math.max(0, Math.min(lines.length - 1, nearestIdx(lines, S.axis === "i" ? S.il : S.xl) + d)); setPos(S.axis === "i" ? { il: lines[i] } : { xl: lines[i] }); }
 function stepTime(d) { const v = refVol(); if (!v) return; const i = Math.max(0, Math.min(v.samples.length - 1, nearestIdx(v.samples, S.twt) + d)); setPos({ twt: v.samples[i] }); }
@@ -412,9 +423,22 @@ document.querySelectorAll(".zoomer").forEach((z) => z.querySelectorAll("button")
   if (b.dataset.z === "fit") P.fit(); else if (P.view) P.zoom(b.dataset.z === "in" ? 1 / 1.5 : 1.5, P.m.l + P.pw() / 2, P.m.t + P.ph() / 2);
 })));
 
+// ------------------------------------------------------------------ light / dark: only the page around the pictures changes
+function setTheme(t) {
+  const root = document.documentElement; root.classList.add("no-transitions"); root.dataset.theme = t;
+  const b = $("btn-theme"); b.setAttribute("aria-label", t === "dark" ? "Switch to light theme" : "Switch to dark theme");
+  try { localStorage.setItem("copilot.theme", t); } catch (e) {}
+  sec.draw(); map.draw(); logs.draw();                      // axes and labels pick up the new colours
+  requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("no-transitions")));
+}
+$("btn-theme").onclick = () => setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+if (window.ResizeObserver) { const ro = new ResizeObserver(() => { sec.resize(); map.resize(); logs.resize(); }); document.querySelectorAll(".canvas-wrap").forEach((w) => ro.observe(w)); }
+
+
 // jump to a place: {il, xl, twt, horizon, vol(role), axis, volrole, layer, map:{horizon, attr}}
 function go(w) {
   if (!w) return;
+  if (w.well || w.map || w.mapmode || w.horizon) reveal("map"); if (w.axis) reveal("section");   // a jump never lands in a hidden view
   const role = w.vol || w.volrole;
   if (role) { const v = S.vols.find((q) => q.role === role || q.name === role); if (v) { S.vol = v.name; $("sel-vol").value = v.name; $("sel-cmap").value = cmapFor(v); } }
   if (w.axis && w.axis !== S.axis) { S.axis = w.axis; document.querySelectorAll("#tabs-axis button").forEach((b) => b.classList.toggle("on", b.dataset.axis === w.axis)); sec.view = null; }
@@ -432,11 +456,23 @@ function go(w) {
 }
 
 // ------------------------------------------------------------------ state, import, run
-function note(text) { const t = $("tip"); t.textContent = text; t.style.left = "50%"; t.style.top = "64px"; t.style.transform = "translateX(-50%)"; t.classList.remove("hidden"); clearTimeout(note.t); note.t = setTimeout(() => { t.classList.add("hidden"); t.style.transform = ""; }, 3200); }
+function note(text) { say(text); const t = $("tip"); t.textContent = text; t.style.left = "50%"; t.style.top = "64px"; t.style.transform = "translateX(-50%)"; t.classList.remove("hidden"); clearTimeout(note.t); note.t = setTimeout(() => { t.classList.add("hidden"); t.style.transform = ""; }, 3200); }
+// one status line for screen readers
+function say(text) { const l = $("status-line"); if (l && text) l.textContent = text; }
+// a popover in place of a title attribute: on hover and on keyboard focus
+function hint(el, text) {
+  el._hint = text;
+  if (!el._desc) { el._desc = document.createElement("span"); el._desc.className = "sr-only"; el._desc.id = "hint-" + (hint.n = (hint.n || 0) + 1); document.body.append(el._desc); el.setAttribute("aria-describedby", el._desc.id); }
+  el._desc.textContent = text; if (el._hinted) return; el._hinted = true;
+  const show = () => { if (!el._hint) return; clearTimeout(note.t); const t = $("tip"); t.style.transform = ""; t.textContent = el._hint; t.classList.remove("hidden"); const r = el.getBoundingClientRect(); t.style.left = Math.max(8, Math.min(window.innerWidth - 390, r.left)) + "px"; t.style.top = (r.bottom + 6) + "px"; if (r.bottom + 6 + t.offsetHeight > window.innerHeight) t.style.top = (r.top - 6 - t.offsetHeight) + "px"; };
+  const hide = () => $("tip").classList.add("hidden");
+  el.addEventListener("mouseenter", show); el.addEventListener("focus", show); el.addEventListener("mouseleave", hide); el.addEventListener("blur", hide);
+}
 function pill(id, cls, text) { const p = $(id); p.className = "pill " + cls; p.querySelector("span").textContent = text; }
 
 function syncFaultControls() {
   $("fault-cutoff").value = S.faultMax;
+  $("fault-cutoff").style?.setProperty("--fill", S.faultMax * 100 + "%");   // the orange part of the track
   $("fault-cutoff-value").textContent = S.faultMax >= 1 ? "off" : S.faultMax.toFixed(2);
   const method = (S.interp.fault_settings || {}).method || "Cached faults";
   $("fault-cutoff-status").textContent = S.faultDirty ? "Preview only; Apply updates sticks and leads. Sticks hidden during preview." : method;
@@ -468,7 +504,7 @@ async function loadState(first) {
   if (!S.vols.find((v) => v.name === S.vol)) S.vol = S.ref;
   const sv = $("sel-vol"); sv.innerHTML = S.vols.map((v) => `<option value="${esc(v.name)}">${esc(v.label)}</option>`).join(""); if (S.vol) { sv.value = S.vol; $("sel-cmap").value = cmapFor(vol()); }
   pill("pill-data", S.vols.length ? "ok" : "", S.vols.length ? `${S.vols.length} volumes · ${S.wells.length} wells` : "No data yet");
-  pill("pill-llm", st.llm.ok ? "ok" : "bad", st.llm.ok ? "Assistant ready" : "Assistant offline"); $("pill-llm").title = `${st.llm.model} — ${st.llm.msg}`;
+  pill("pill-llm", st.llm.ok ? "ok" : "bad", st.llm.ok ? "Assistant ready" : "Assistant offline"); hint($("pill-llm"), `${st.llm.model} — ${st.llm.msg}`);
   if (S.interp.ready) {
     pill("pill-interp", "ok", "Interpreted " + (S.interp.built || ""));
     $("sel-hz").innerHTML = S.interp.horizons.map((h) => `<option value="${esc(h.name)}">${esc(h.name)}${h.source === "gemma" ? " (Gemma)" : ""}</option>`).join("");
@@ -494,10 +530,11 @@ async function loadState(first) {
 function showProgress(s) {
   const box = $("progress"); if (!s || !s.state || (s.state === "done" && !showProgress.keep)) { box.classList.add("hidden"); return; }
   if (s.state === "running") showProgress.keep = true;
-  box.classList.remove("hidden");
+  box.classList.remove("hidden"); box.classList.toggle("running", s.state === "running");
   const ids = (s.stages || []).map((q) => q.id), cur = ids.indexOf(s.stage);
-  $("prog-steps").innerHTML = (s.stages || []).map((q, i) => `<span class="${s.state === "done" || i < cur ? "done" : i === cur ? (s.state === "error" ? "fail" : "now") : ""}">${s.state === "done" || i < cur ? "✓ " : ""}${esc(q.label)}</span>`).join("");
+  $("prog-steps").innerHTML = (s.stages || []).map((q, i) => `<span class="${s.state === "done" || i < cur ? "done" : i === cur ? (s.state === "error" ? "fail" : "now") : ""}">${s.state === "done" || i < cur ? '<i class="tick">✓</i> ' : ""}${esc(q.label)}</span>`).join("");
   $("prog-msg").textContent = s.state === "error" ? "Stopped: " + (s.error || s.message || "") : s.state === "done" ? "Finished. You can close this bar by reloading the page." : (s.message || "");
+  if (say.last !== $("prog-msg").textContent) { say.last = $("prog-msg").textContent; say(say.last); }
   if (s.state === "running") pill("pill-interp", "busy", "Interpreting…"); else if (s.state === "error") pill("pill-interp", "bad", "Run stopped");
   $("btn-run").disabled = s.state === "running";
   $("btn-apply-faults").disabled = s.state === "running" || !S.interp.ready || !S.faultDirty;
@@ -567,22 +604,71 @@ async function runStages(stages) {
 }
 
 // ------------------------------------------------------------------ side panel: leads, about
-document.querySelectorAll("#tabs-side button").forEach((b) => (b.onclick = () => {
-  document.querySelectorAll("#tabs-side button").forEach((q) => q.classList.toggle("on", q === b));
+document.querySelectorAll("#tabs-side button[data-side]").forEach((b) => (b.onclick = () => {
+  document.querySelectorAll("#tabs-side button[data-side]").forEach((q) => q.classList.toggle("on", q === b));
   for (const s of ["chat", "leads", "wells", "about"]) $("side-" + s).classList.toggle("hidden", s !== b.dataset.side);
 }));
-function showSide(name) { document.querySelector(`#tabs-side button[data-side="${name}"]`).click(); }
+function showSide(name) { setChatOpen(true); document.querySelector(`#tabs-side button[data-side="${name}"]`).click(); }
+
+// ------------------------------------------------------------------ side panel: resize by its edge, close and reopen
+const CHAT_KEY = "copilot.chat";
+function chatPrefs() { try { return JSON.parse(localStorage.getItem(CHAT_KEY)) || {}; } catch (e) { return {}; } }
+function saveChat(p) { try { localStorage.setItem(CHAT_KEY, JSON.stringify({ ...chatPrefs(), ...p })); } catch (e) {} }
+function chatMax() { return Math.max(320, window.innerWidth - 420); }
+function setChatWidth(w, save) {
+  const main = document.querySelector("main"), g = $("chat-grip");
+  if (w == null) { main.classList.remove("chat-sized"); main.style.removeProperty("--chat-w"); g.removeAttribute("aria-valuenow"); if (save) saveChat({ width: null }); return; }
+  w = Math.round(Math.max(320, Math.min(chatMax(), w)));
+  main.classList.add("chat-sized"); main.style.setProperty("--chat-w", w + "px");
+  g.setAttribute("aria-valuemin", 320); g.setAttribute("aria-valuemax", chatMax()); g.setAttribute("aria-valuenow", w);
+  if (save) saveChat({ width: w });
+}
+function setChatOpen(open) {
+  document.querySelector("main").classList.toggle("no-chat", !open);
+  $("show-chat").setAttribute("aria-pressed", open); saveChat({ closed: !open });
+}
+$("chat-close").onclick = () => { setChatOpen(false); $("show-chat").focus(); };
+$("show-chat").onclick = () => { const open = $("show-chat").getAttribute("aria-pressed") !== "true"; setChatOpen(open); if (open) $("chat-input").focus(); };
+// show or hide the section and the map view; one of the two always stays, the other takes its room
+function setViewShown(which, shown, restoring) {
+  const main = document.querySelector("main"), other = which === "section" ? "map" : "section";
+  if (!shown && main.classList.contains("no-" + other)) { note("One view stays on screen. Show the other view first."); return; }
+  main.classList.toggle("no-" + which, !shown); $("show-" + which).setAttribute("aria-pressed", shown);
+  saveChat({ [which === "section" ? "noSection" : "noMap"]: !shown });
+  if (!restoring) { sec.resize(); map.resize(); logs.resize(); }   // reading the size forces layout, so the canvases fit at once (on load, loadState sizes them)
+}
+function reveal(which) { if (document.querySelector("main").classList.contains("no-" + which)) setViewShown(which, true); }
+for (const which of ["section", "map"]) $("show-" + which).onclick = () => setViewShown(which, $("show-" + which).getAttribute("aria-pressed") !== "true");
+(() => {
+  const g = $("chat-grip"), side = $("side"); let start = null;
+  g.addEventListener("pointerdown", (e) => { if (e.button !== 0) return; start = { x: e.clientX, w: side.getBoundingClientRect().width }; g.setPointerCapture(e.pointerId); g.classList.add("dragging"); document.body.classList.add("resizing"); e.preventDefault(); });
+  g.addEventListener("pointermove", (e) => { if (start) setChatWidth(start.w + (start.x - e.clientX)); });
+  const end = () => { if (!start) return; start = null; g.classList.remove("dragging"); document.body.classList.remove("resizing"); setChatWidth(side.getBoundingClientRect().width, true); };
+  g.addEventListener("pointerup", end); g.addEventListener("pointercancel", end);
+  g.addEventListener("dblclick", () => setChatWidth(null, true));
+  g.addEventListener("keydown", (e) => {
+    const w = side.getBoundingClientRect().width;
+    if (e.key === "ArrowLeft") setChatWidth(w + 16, true); else if (e.key === "ArrowRight") setChatWidth(w - 16, true);
+    else if (e.key === "Home" || e.key === "Escape") setChatWidth(null, true); else return;
+    e.preventDefault(); e.stopPropagation();
+  });
+  const p = chatPrefs(); if (p.width) setChatWidth(p.width); if (p.closed) setChatOpen(false);
+  if (p.noSection) setViewShown("section", false, true); else if (p.noMap) setViewShown("map", false, true);
+  window.addEventListener("resize", () => { const q = chatPrefs(); if (q.width) setChatWidth(q.width); });
+})();
 function renderLeads() {
   const box = $("side-leads");
   if (!S.interp.ready) { box.innerHTML = `<div class="card"><h3>No leads yet</h3><div class="sub">Run the interpretation to find and rank traps.</div></div>`; return; }
-  const bar = (v) => `<div class="bar"><i class="${v >= 0.6 ? "" : v >= 0.4 ? "mid" : "low"}" style="width:${Math.round(v * 100)}%"></i></div><span>${v.toFixed(2)}</span>`;
+  const bar = (v, weak) => `<div class="bar"><i class="${weak ? "weak" : ""}" style="width:${Math.round(v * 100)}%"></i></div><span>${v.toFixed(2)}</span>`;
+  const factors = (sc) => { const k = ["trap", "reservoir", "seal", "hydrocarbon_indicators"], low = k.reduce((a, b) => (sc[b] < sc[a] ? b : a)); const lab = { trap: "Trap", reservoir: "Reservoir", seal: "Seal", hydrocarbon_indicators: "Hydrocarbon signs" };
+    return k.map((f) => `<span${f === low ? ' class="weak"' : ""}>${lab[f]}</span>${bar(sc[f], f === low)}`).join("") + `<span class="overall">Overall</span>${bar(sc.overall)}`; };
   box.innerHTML = `<div class="sub" style="color:var(--muted);font-size:12.5px">Ranked by a simple, transparent screening score (not a probability of success). Click a lead to see it; ask the assistant to argue for and against it.</div>` +
-    S.interp.leads.map((l) => `<div class="card"><h3>${l.id} · ${esc(l.kind)} <span class="tag ${l.tested ? "drilled" : "new"}">${l.tested ? "drilled: " + esc(l.wells_inside.join(", ")) : "undrilled"}</span></h3>
+    S.interp.leads.map((l) => `<div class="card lead" data-lead="${l.id}"${S.leadSel === l.id ? ' aria-current="true"' : ""}><h3>${l.id} · ${esc(l.kind)} <span class="tag ${l.tested ? "drilled" : "new"}">${l.tested ? "drilled: " + esc(l.wells_inside.join(", ")) : "undrilled"}</span></h3>
       <div class="sub">${esc(l.horizon)} · crest IL ${l.where.il} / XL ${l.where.xl} at ${Math.round(l.where.twt)} ms · ${l.area_km2 != null ? l.area_km2 + " km²" : ""} · relief ${Math.round(l.relief_ms)} ms</div>
-      <div class="bars"><span>Trap</span>${bar(l.scores.trap)}<span>Reservoir</span>${bar(l.scores.reservoir)}<span>Seal</span>${bar(l.scores.seal)}<span>Hydrocarbon signs</span>${bar(l.scores.hydrocarbon_indicators)}<span><b>Overall</b></span>${bar(l.scores.overall)}</div>
+      <div class="bars">${factors(l.scores)}</div>
       <ul>${l.for.slice(0, 3).map((e) => `<li>${evChip(e)} ${esc(((S.evidence[e] || {}).text || "").replace(/^L\d+: /, ""))}</li>`).join("")}</ul>
       <div class="row"><button class="small ghost" data-show="${l.id}">Show on map</button><button class="small ghost" data-explain="${l.id}">Explain</button><button class="small ghost" data-debate="${l.id}">Argue both sides</button></div></div>`).join("");
-  box.querySelectorAll("[data-show]").forEach((b) => (b.onclick = () => { const l = S.interp.leads.find((q) => q.id === b.dataset.show); go({ ...l.where, map: { horizon: l.horizon, attr: S.interp.map_attrs.includes("sand_below") ? "sand_below" : "time" } }); }));
+  box.querySelectorAll("[data-show]").forEach((b) => (b.onclick = () => { S.leadSel = b.dataset.show; box.querySelectorAll(".card.lead").forEach((c) => (c.dataset.lead === S.leadSel ? c.setAttribute("aria-current", "true") : c.removeAttribute("aria-current"))); const l = S.interp.leads.find((q) => q.id === b.dataset.show); go({ ...l.where, map: { horizon: l.horizon, attr: S.interp.map_attrs.includes("sand_below") ? "sand_below" : "time" } }); }));
   box.querySelectorAll("[data-explain]").forEach((b) => (b.onclick = () => { showSide("chat"); ask(`Explain lead ${b.dataset.explain}: what is it, what supports it, what are the risks, and what would you do next?`); }));
   box.querySelectorAll("[data-debate]").forEach((b) => (b.onclick = () => { showSide("chat"); ask(`Argue both sides for lead ${b.dataset.debate}: first the strongest case FOR drilling it, then the strongest case AGAINST, each with evidence, then give your verdict.`); }));
   bindChips(box);
@@ -603,7 +689,7 @@ function renderWells() {
         ${ex[w.name] ? `<div class="sub" style="margin-top:6px">Left out of the rock-certainty check: ${esc(ex[w.name])}</div>` : ""}
         <div class="row">${w.has && w.has.logs ? `<button class="small ghost" data-logs="${esc(w.name)}">Show logs</button>` : ""}${w.il != null ? `<button class="small ghost" data-gowell="${esc(w.name)}">Go to well</button>` : ""}${S.interp.ready ? `<button class="small ghost" data-askwell="${esc(w.name)}">Explain</button>` : ""}</div></div>`;
     }).join("") + (S.vols.length ? `<div class="row"><button class="small ghost" id="btn-rewells" title="Read the well files again and redo the well ties and leads; the seismic steps are kept">Read the wells again</button></div>` : "");
-  box.querySelectorAll("[data-logs]").forEach((b) => (b.onclick = () => { applyMapMode("logs"); logs.resize(); showWell(b.dataset.logs); }));
+  box.querySelectorAll("[data-logs]").forEach((b) => (b.onclick = () => { reveal("map"); applyMapMode("logs"); logs.resize(); showWell(b.dataset.logs); }));
   box.querySelectorAll("[data-gowell]").forEach((b) => (b.onclick = () => { const w = S.wells.find((q) => q.name === b.dataset.gowell); go({ il: w.il, xl: w.xl }); }));
   box.querySelectorAll("[data-askwell]").forEach((b) => (b.onclick = () => { showSide("chat"); ask(`Interpret well ${b.dataset.askwell}: what do its logs show, where is the best reservoir, is there any sign of hydrocarbons, and how does it tie to the seismic horizons?`); }));
   if ($("btn-rewells")) $("btn-rewells").onclick = () => runStages(["wells", "calibrate", "leads", "knowledge", "dossier"]);
@@ -653,6 +739,8 @@ document.querySelectorAll("#tabs-logaxis button").forEach((b) => (b.onclick = ()
 }));
 
 // ------------------------------------------------------------------ well-log panel
+// the log plot is a picture like the seismic: its ground and ink stay dark in both themes so the curve colours keep their contrast
+const INK = { ground: "#0a0a0a", text: "#f4f2ef", text3: "#918e89", line: "rgba(244,242,239,.08)", strong: "rgba(244,242,239,.4)", raised: "#222222", accent: "#f26a1b" };
 class LogPanel {
   constructor(cv) {
     this.cv = cv; this.ctx = cv.getContext("2d"); this.d = null; this.view = null; this.m = { l: 54, t: 46, r: 8, b: 10 }; this.tracks = [];
@@ -695,11 +783,12 @@ class LogPanel {
   conv(twt) { const L = this.d.logs; if (S.logAxis === "time" && this.d.has_time) return twt; if (!L.twt) return null; let b = null, bd = Infinity; for (let i = 0; i < L.twt.length; i++) { if (L.twt[i] == null) continue; const d = Math.abs(L.twt[i] - twt); if (d < bd) { bd = d; b = i; } } return b == null || bd > 30 ? null : L.md[b]; }
   draw() {
     const c = this.ctx; if (!this.w) return; c.clearRect(0, 0, this.w, this.h); if (!this.d || !this.view) return;
+    c.fillStyle = INK.ground; c.fillRect(0, 0, this.w, this.h);
     const L = this.d.logs, a = this.ax(), time = S.logAxis === "time" && this.d.has_time, n = this.tracks.length + 1, tw = this.pw() / n, T = this.m.t, B = this.h - this.m.b;
-    c.font = "12px Segoe UI, sans-serif"; c.textBaseline = "alphabetic"; c.textAlign = "left"; c.fillStyle = "#e6edf2";
+    c.font = "12px " + token("--font"); c.textBaseline = "alphabetic"; c.textAlign = "left"; c.fillStyle = INK.text;
     const tie = this.d.tie; c.fillText(`${this.d.name} · ${this.d.td_source || "no time-depth"}${tie && tie.clear && tie.shift_ms ? ` · logs fit the seismic best moved ${tie.shift_ms > 0 ? "+" : ""}${tie.shift_ms} ms` : ""}`, this.m.l, 13);
     // axis
-    c.fillStyle = "#8fa1af"; c.strokeStyle = "#2a3640"; c.font = "11px Segoe UI, sans-serif"; c.textAlign = "right"; c.textBaseline = "middle";
+    c.fillStyle = INK.text3; c.strokeStyle = INK.line; c.font = "11px " + token("--mono"); c.textAlign = "right"; c.textBaseline = "middle";
     const span = this.view.v1 - this.view.v0, raw = span / Math.max(3, this.ph() / 60), p10 = Math.pow(10, Math.floor(Math.log10(raw))), st = [1, 2, 5, 10].map((q) => q * p10).find((q) => q >= raw) || raw;
     for (let t = Math.ceil(this.view.v0 / st) * st; t <= this.view.v1; t += st) { const y = this.Y(t); c.fillText(Math.round(t), this.m.l - 5, y); c.beginPath(); c.moveTo(this.m.l, y); c.lineTo(this.w - this.m.r, y); c.stroke(); }
     c.save(); c.translate(11, T + this.ph() / 2); c.rotate(-Math.PI / 2); c.textAlign = "center"; c.fillText(time ? "two-way time (ms)" : "measured depth (m)", 0, 0); c.restore();
@@ -715,7 +804,7 @@ class LogPanel {
       c.stroke();
     });
     // rock column: sand yellow, hydrocarbon flag red
-    const xr = this.m.l + this.tracks.length * tw; c.fillStyle = "#3d4a44"; c.fillRect(xr, T, tw - 4, this.ph());
+    const xr = this.m.l + this.tracks.length * tw; c.fillStyle = INK.raised; c.fillRect(xr, T, tw - 4, this.ph());
     for (const s of ((this.d.zones_detail || {}).sands || [])) {
       const a0 = time ? s.top_twt : s.top_md, a1 = time ? s.base_twt : s.base_md; if (a0 == null || a1 == null) continue;
       const y0 = this.Y(a0), y1 = Math.max(this.Y(a1), y0 + 1); if (y1 < T || y0 > B) continue;
@@ -723,22 +812,23 @@ class LogPanel {
       if (y1 - y0 > 11) { c.fillStyle = "#111"; c.textAlign = "left"; c.textBaseline = "middle"; c.fillText(s.id, xr + 4, (y0 + y1) / 2); }
     }
     // horizons and the crosshair time
-    c.textAlign = "left"; c.textBaseline = "bottom"; c.font = "bold 11px Segoe UI, sans-serif";
+    c.textAlign = "left"; c.textBaseline = "bottom"; c.font = "500 11px " + token("--font");
     for (const mk of this.d.markers || []) { const v = this.conv(mk.twt); if (v == null) continue; const y = this.Y(v); c.strokeStyle = mk.color; c.lineWidth = 1.5; c.beginPath(); c.moveTo(this.m.l, y); c.lineTo(this.w - this.m.r, y); c.stroke(); c.fillStyle = mk.color; c.fillText(mk.name, this.m.l + 3, y - 1); }
     const cv = S.twt != null ? this.conv(S.twt) : null;
-    if (cv != null) { const y = this.Y(cv); c.strokeStyle = "rgba(0,255,255,.85)"; c.lineWidth = 1; c.setLineDash([5, 4]); c.beginPath(); c.moveTo(this.m.l, y); c.lineTo(this.w - this.m.r, y); c.stroke(); c.setLineDash([]); }
+    if (cv != null) { const y = this.Y(cv); c.strokeStyle = INK.accent; c.lineWidth = 1; c.setLineDash([6, 4]); c.beginPath(); c.moveTo(this.m.l, y); c.lineTo(this.w - this.m.r, y); c.stroke(); c.setLineDash([]); }
     c.restore();
     // track frames and headings
-    c.font = "11px Segoe UI, sans-serif"; c.textAlign = "left"; c.textBaseline = "alphabetic";
+    c.font = "11px " + token("--font"); c.textAlign = "left"; c.textBaseline = "alphabetic";
     const head = (x0, a, ca, b, cb) => { c.save(); c.beginPath(); c.rect(x0, 16, tw - 6, 28); c.clip(); c.fillStyle = ca; c.fillText(a, x0 + 2, 28); c.fillStyle = cb; c.fillText(b, x0 + 2, 41); c.restore(); };
     this.tracks.forEach((t, k) => {
-      const x0 = this.m.l + k * tw; c.strokeStyle = "#2a3640"; c.strokeRect(x0, T, tw - 4, this.ph());
-      head(x0, t.label, t.color, `${fmt(t.log ? Math.pow(10, t.lo) : t.lo)} – ${fmt(t.log ? Math.pow(10, t.hi) : t.hi)}`, "#8fa1af");
+      const x0 = this.m.l + k * tw; c.strokeStyle = INK.strong; c.strokeRect(x0, T, tw - 4, this.ph());
+      head(x0, t.label, t.color, `${fmt(t.log ? Math.pow(10, t.lo) : t.lo)} – ${fmt(t.log ? Math.pow(10, t.hi) : t.hi)}`, INK.text3);
     });
-    c.strokeStyle = "#2a3640"; c.strokeRect(xr, T, tw - 4, this.ph()); head(xr, "Sand", "#f0cd28", "Hydrocarbon flag", "#e5484d");
+    c.strokeStyle = INK.strong; c.strokeRect(xr, T, tw - 4, this.ph()); head(xr, "Sand", "#f0cd28", "Hydrocarbon flag", "#e5484d");
   }
 }
 const logs = new LogPanel($("cv-logs"));
+setTheme(document.documentElement.dataset.theme === "light" ? "light" : "dark");
 
 // ------------------------------------------------------------------ chat
 function evChip(id) { return id ? `<span class="ev ${evClass(id)}" data-ev="${id}">${id}</span>` : ""; }
@@ -766,9 +856,10 @@ function bindChips(root) {
   });
   root.querySelectorAll(".go").forEach((c) => (c.onclick = () => go({ il: +c.dataset.il, xl: +c.dataset.xl, twt: c.dataset.twt ? +c.dataset.twt : undefined, vol: c.dataset.vol || undefined })));
 }
+const SHELL_SVG = `<svg class="shell-loader" viewBox="0 0 64 64" aria-hidden="true"><path pathLength="1" d="M33.7 33.0 33.1 32.6 32.5 32.0 32.1 31.3 31.9 30.5 31.9 29.6 32.0 28.7 32.4 27.8 33.1 27.0 33.9 26.4 34.9 25.9 36.0 25.7 37.2 25.8 38.4 26.1 39.5 26.8 40.5 27.7 41.2 28.9 41.7 30.3 41.8 31.8 41.6 33.4 40.9 35.0 39.9 36.3 38.5 37.5 36.8 38.3 34.9 38.8 32.9 38.7 30.8 38.2 28.8 37.2 27.1 35.6 25.8 33.6 24.9 31.2 24.5 28.6 24.9 25.9 25.9 23.2 27.5 20.8 29.8 18.7 32.7 17.1 35.9 16.2 39.4 16.2 43.0 16.9 46.5 18.6 49.5 21.2 52.0 24.5 53.7 28.5 54.5 32.9 54.1 37.6 52.6 42.3 49.9 46.7 46.1 50.4 41.3 53.3 35.8 55.0 29.7 55.4 23.5 54.3 17.5 51.7 12.0 47.5"/></svg>`;
 function addUser(text) { const d = document.createElement("div"); d.className = "msg user"; d.textContent = text; $("messages").appendChild(d); d.scrollIntoView({ block: "end" }); }
 function addBot(text, final) {
-  const d = document.createElement("div"); d.className = "msg bot"; d.innerHTML = `<div class="steps"></div><div class="body"></div>`; $("messages").appendChild(d);
+  const d = document.createElement("div"); d.className = "msg bot"; d.innerHTML = SHELL_SVG.replace('class="shell-loader"', 'class="bot-mark"') + `<div class="steps"></div><div class="body"></div>`; $("messages").appendChild(d);
   if (text != null) { d.querySelector(".body").innerHTML = renderMd(text); bindChips(d); } d.scrollIntoView({ block: "end" }); return d;
 }
 function finishBot(d, text) {
@@ -784,6 +875,7 @@ async function ask(text, opt = {}) {
   S.busy = true; $("chat-send").disabled = true; $("suggest").classList.add("hidden");
   addUser(text); S.chat.push({ role: "user", content: text });
   const d = addBot(), steps = d.querySelector(".steps"), body = d.querySelector(".body"); body.classList.add("typing");
+  d.classList.add("answering"); say("Writing the answer");
   let acc = "", err = false;
   try {
     const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: S.chat, view: viewCtx(), attach_view: opt.attach != null ? opt.attach : $("attach-view").checked }) });
@@ -801,7 +893,8 @@ async function ask(text, opt = {}) {
       }
     }
   } catch (e) { err = true; d.classList.add("err"); body.textContent = "The app did not answer: " + e.message; }
-  body.classList.remove("typing"); bindChips(d);
+  d.classList.remove("answering"); body.classList.remove("typing"); bindChips(d);
+  say(err ? "The answer did not finish." : "Answer ready.");
   if (!err && acc) { S.chat.push({ role: "assistant", content: acc }); finishBot(d, acc); } else if (err) S.chat.pop();
   S.busy = false; $("chat-send").disabled = false;
 }
@@ -828,5 +921,31 @@ $("btn-similar").onclick = async () => {
     addBot(txt, true); S.chat.push({ role: "user", content: `(I ran a look-alike search at IL ${S.il}, XL ${S.xl}, TWT ${S.twt} ms.)` }, { role: "assistant", content: txt });
   } catch (e) { note(e.message); }
 };
+
+// ------------------------------------------------------------------ tabs for assistive tech, quiet hints, the navigate fold
+for (const c of document.querySelectorAll("#layers .chip")) { const sync = () => c.setAttribute("aria-pressed", c.classList.contains("on")); sync(); new MutationObserver(sync).observe(c, { attributes: true, attributeFilter: ["class"] }); }
+for (const list of document.querySelectorAll('[role="tablist"]')) {
+  const tabs = [...list.querySelectorAll('[role="tab"]')];
+  const sync = () => tabs.forEach((t) => { const on = t.classList.contains("on"); t.setAttribute("aria-selected", on); t.tabIndex = on ? 0 : -1; });
+  sync(); new MutationObserver(sync).observe(list, { subtree: true, attributes: true, attributeFilter: ["class"] });
+  list.addEventListener("keydown", (e) => {
+    const i = tabs.indexOf(document.activeElement); if (i < 0 || !document.activeElement.matches(":focus-visible")) return;
+    const j = e.key === "ArrowRight" ? (i + 1) % tabs.length : e.key === "ArrowLeft" ? (i - 1 + tabs.length) % tabs.length : e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : -1;
+    if (j < 0) return; e.preventDefault(); e.stopPropagation(); tabs[j].focus(); tabs[j].click(); (tabs.find((t) => t.classList.contains("on")) || tabs[j]).focus();
+  });
+}
+const untitle = (root) => { for (const el of root.querySelectorAll("[title]")) { hint(el, el.title); el.removeAttribute("title"); } };   // the page's own hints show in the quiet tip, not the browser's tooltip
+untitle(document.body);
+const unhint = (n) => { for (const el of [n, ...n.querySelectorAll("[aria-describedby]")]) if (el._desc) { el._desc.remove(); el._desc = null; } };   // a removed element takes its hidden hint text with it
+new MutationObserver((ms) => { for (const m of ms) {
+  for (const n of m.removedNodes) if (n.nodeType === 1 && !n.isConnected) unhint(n);
+  for (const n of m.addedNodes) if (n.nodeType === 1) { if (n.hasAttribute("title")) { hint(n, n.title); n.removeAttribute("title"); } untitle(n); }
+} }).observe(document.body, { childList: true, subtree: true });
+if (document.fonts) document.fonts.ready.then(() => { sec.draw(); map.draw(); logs.draw(); });   // canvas text picks up Geist once it has loaded
+hint($("btn-similar"), "Find other places whose seismic looks like the crosshair spot");
+hint($("btn-explain"), "Ask the assistant about the crosshair spot");
+document.addEventListener("click", (e) => { const n = $("navhelp"); if (n.open && !n.contains(e.target)) n.open = false; });
+document.addEventListener("keydown", (e) => { if (e.key !== "Escape") return; $("tip").classList.add("hidden"); const n = $("navhelp"); if (n.open) { n.open = false; n.querySelector("summary").focus(); } });
+document.querySelector(".skip").onclick = (e) => { e.preventDefault(); showSide("chat"); $("chat-input").focus(); };
 
 loadState(true).catch((e) => { $("empty-section").textContent = "The app could not start: " + e.message; });
