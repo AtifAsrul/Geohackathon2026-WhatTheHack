@@ -54,7 +54,7 @@ class Monitor:
 
     def log_files(self):
         folder = self.workspace / "logs"
-        return sorted(p for pattern in ("pipeline.log", "gpu_job_*.log", "sdip_*.log")
+        return sorted(p for pattern in ("pipeline.log", "gpu_job_*.log", "openvds_*.log", "sdip_*.log")
                       for p in folder.glob(pattern))
 
     def poll(self):
@@ -111,8 +111,10 @@ class Monitor:
         return "Server/monitor active; waiting for interpretation" if not status else f"Interpretation state: {status.get('state', 'unknown')}"
 
 
-def run_command(command, label, heartbeat=15, monitor=None):
+def run_command(command, label, heartbeat=15, monitor=None, sizes=None):
+    from sizes import safe_sample
     started = last = time.monotonic()
+    safe_sample(sizes)
     print(f"[START {time.strftime('%H:%M:%S')}] {label}", flush=True)
     try:
         child = subprocess.Popen(command)
@@ -121,6 +123,7 @@ def run_command(command, label, heartbeat=15, monitor=None):
         return 1
     try:
         while True:
+            safe_sample(sizes)
             if monitor:
                 try:
                     monitor.poll()
@@ -152,6 +155,7 @@ def run_command(command, label, heartbeat=15, monitor=None):
             monitor.poll()
         except Exception as exc:
             print(f"[MONITOR WARNING] {exc}", flush=True)
+    safe_sample(sizes)
     print(f"[{'OK' if code == 0 else 'FAILED'}] {label} | elapsed {elapsed(time.monotonic() - started)} | exit {code}", flush=True)
     return code if code >= 0 else 128 - code
 
@@ -162,23 +166,33 @@ def main():
     parser.add_argument("--label", default="Command")
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--heartbeat", type=float, default=15)
+    parser.add_argument("--sizes", action="store_true", help="report app-folder sizes during a command")
+    parser.add_argument("--no-sizes", action="store_true", help="disable periodic directory size sampling")
+    parser.add_argument("--size-interval", type=float, default=30, help="seconds between bounded metadata scans (minimum 5)")
     argv = sys.argv[1:]
     boundary = argv.index("--") if "--" in argv else len(argv)
     args = parser.parse_args(argv[:boundary])
     command = argv[boundary + 1:]
     if args.heartbeat <= 0:
         parser.error("--heartbeat must be positive")
+    if args.size_interval < 5:
+        parser.error("--size-interval must be at least 5 seconds")
     workspace = args.workspace or Path(os.environ.get("COPILOT_WORKSPACE", Path(__file__).resolve().parent.parent / "workspace"))
     monitor = Monitor(workspace, emit=lambda msg: print(msg, flush=True)) if args.mode == "watch" or args.workspace else None
+    from sizes import SizeMonitor, safe_sample
+    models = Path(os.environ.get("COPILOT_MODELS", Path(__file__).resolve().parent.parent / "models"))
+    sizes = SizeMonitor(workspace, models, emit=lambda msg: print(msg, flush=True), interval=args.size_interval) \
+        if not args.no_sizes and (args.mode == "watch" or args.workspace or args.sizes) else None
     if args.mode == "run":
         if not command:
             parser.error("run needs a command after --")
-        return run_command(command, args.label, args.heartbeat, monitor)
+        return run_command(command, args.label, args.heartbeat, monitor, sizes)
     print(f"Read-only monitor: {workspace}\nBars show stage position, not time remaining. Ctrl+C stops only this monitor.", flush=True)
     last = time.monotonic()
     try:
         while True:
             monitor.poll()
+            safe_sample(sizes)
             if time.monotonic() - last >= args.heartbeat:
                 print(f"[ACTIVE {time.strftime('%H:%M:%S')}] {monitor.heartbeat()}", flush=True)
                 last = time.monotonic()

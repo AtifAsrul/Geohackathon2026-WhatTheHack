@@ -82,7 +82,7 @@ cd /data/epic20/APGCE/$USER/exploration-copilot
 ```
 
 Press **Ctrl+C** in this second terminal to stop only the monitor. It reads this app's existing files;
-it does not start/cancel jobs, query system resources, install anything, or modify data. It starts
+it does not start/cancel jobs, install anything, or modify data. It starts
 following logs from their current ends. If `COPILOT_WORKSPACE` was set for your app, use the same
 setting here (or pass `--workspace /your/app/workspace`).
 
@@ -91,7 +91,8 @@ Logs remain inside `workspace/logs/` (or your configured workspace):
 * `setup.log`: append-only setup output, including failures.
 * `server.log`: append-only server output and terminal monitoring from `bash start.sh`.
 * `pipeline.log`: current interpretation output.
-* `sdip_*.log`: live converter output, available before a conversion finishes.
+* `openvds_*.log`: live OpenVDS importer progress and errors, available before conversion finishes.
+* `sdip_*.log`: legacy converter logs, if an older run produced them.
 * `gpu_job_*.log`: Slurm worker output, once the GPU job starts.
 
 For plain log output in a second terminal:
@@ -117,6 +118,69 @@ For an app that is already running, use the second-terminal monitor above immedi
 the existing run alone. The updated start script and live converter logging take effect on the next
 app/pipeline launch. If setup is not yet complete, run `bash setup.sh` after pulling; otherwise use
 `bash start.sh` the next time you launch the app.
+
+### Sizes and speed
+
+Setup, start and the read-only monitor report sizes for `models/` and the configured workspace's
+`stores/`, `interp/` and `logs/` every 30 seconds. Reports use decimal MB/GB and show net file-size
+growth in MB/s after two samples. Where the filesystem exposes allocated blocks, allocation and
+its growth rate are shown separately. Preallocated/sparse files can have a large logical size before
+data is written. Net growth is **not disk bandwidth, download speed, or completion percentage**;
+CPU/GPU processing can be active while file sizes stay unchanged. Replacement/deletion can cause
+negative net growth. Model downloads retain their own byte-based download progress.
+
+The size sampler reads file metadata only, skips symlinks/junctions, and never scans the input-data
+folder or the system package/cache directories. Each folder scan is capped at 4,000 entries and a
+0.15-second cooperative budget (a filesystem call may itself take longer). A truncated/unreadable
+scan is labelled `>=` / `partial scan`; its rate is withheld. To reduce metadata work further:
+
+```bash
+.venv/bin/python -u scripts/terminal.py watch --size-interval 60
+```
+
+Or omit size scans with `watch --no-sizes`. Directory rates begin when the monitor attaches;
+they do not reconstruct earlier throughput. A size report may show zero bytes before an output
+folder has been created. Environment installations and pip caches are excluded from the totals.
+
+### Trying OpenVDS instead of SDIP
+
+New conversions now use OpenVDS 3.4.9's `SEGYImport` and local `.vds` files with **lossless Zip**
+compression. The viewer and interpretation pipeline read full-resolution data directly through
+OpenVDS. No cloud storage or system installation is needed. The importer log includes its own
+progress; completion reports SEG-Y size, VDS size, elapsed time and average source MB/s for import
+plus validation. This average is a conversion measurement, not raw filesystem bandwidth.
+
+To update an existing HPC installation without rerunning every setup step:
+
+```bash
+cd /data/epic20/APGCE/$USER/exploration-copilot
+git pull --ff-only origin main
+.venv/bin/python -m pip install --only-binary=:all: "openvds==3.4.9"
+```
+
+Existing converted stores are reused automatically, including legacy MDIO/NumPy stores. For a
+fresh OpenVDS trial that preserves the current interpretation and converted stores, launch with a
+separate workspace (this needs additional disk space for new outputs):
+
+```bash
+COPILOT_WORKSPACE="$PWD/workspace-openvds" bash start.sh
+```
+
+Then import the normal challenge input folder in the browser and run interpretation. The second
+terminal monitor must use the same workspace:
+
+```bash
+COPILOT_WORKSPACE="$PWD/workspace-openvds" .venv/bin/python -u scripts/terminal.py watch
+```
+
+The app validates inline/crossline/sample coordinates and decodes a trace before publishing a
+VDS. Irregular spacing or an importer geometry mismatch uses the built-in segyio/NumPy fallback
+and explains the reason in the log. In synthetic testing, OpenVDS 3.4.9 inferred incorrect axis
+steps for one crossline-sorted fixture; the validation rejected that output and the fallback
+preserved the values. The HPC files must still be checked there. `COPILOT_NO_OPENVDS=1` explicitly
+selects the fallback for **new** conversions. Existing SDIP environments and original SEG-Y files
+are left in place. Stop/relaunch this trial app before expecting a running process to use new code;
+the separate read-only monitor can attach without stopping an existing run.
 
 ---
 

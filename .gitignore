@@ -1,7 +1,9 @@
 workspace/
+workspace-*/
 models/
 .venv/
 .venv-sdip/
+.venv-openvds-test/
 __pycache__/
 *.pyc
 setup.log

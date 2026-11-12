@@ -9,10 +9,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
 
 
 def load_script(name):
@@ -70,7 +70,7 @@ class MonitorTests(unittest.TestCase):
 
     def test_live_pipeline_gpu_and_converter_logs(self):
         monitor = terminal.Monitor(self.workspace, self.lines.append)
-        for name in ("pipeline.log", "gpu_job_123.log", "sdip_full.log"):
+        for name in ("pipeline.log", "gpu_job_123.log", "openvds_full.log"):
             (self.logs / name).write_text("first update\n")
         monitor.poll()
         self.assertEqual(len(self.lines), 3)
@@ -168,57 +168,6 @@ class DownloadTests(unittest.TestCase):
                 self.assertTrue(downloader.get_rgt())
             self.assertIn("[####################] 100%", output.getvalue())
             self.assertEqual((Path(temp) / "rgt" / "RGT-Est_CIG-Benchmark.pt").read_bytes(), b"12345678")
-
-
-class ConverterLogTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.workspace = Path(self.temp.name)
-        # Import with a temporary workspace, never initialize the user's workspace.
-        with patch.dict(os.environ, {"COPILOT_WORKSPACE": self.temp.name}):
-            from copilot import store
-        self.store = store
-        self.logs = self.workspace / "logs"
-        self.logs.mkdir(exist_ok=True)
-        self.out = self.workspace / "volume.mdio"
-        self.out.mkdir()
-        self.messages = []
-        self.log_patch = patch.object(store.config, "LOGS", self.logs)
-        self.log_patch.start()
-        self.addCleanup(self.log_patch.stop)
-
-    def run_converter(self, runner):
-        with patch.object(self.store, "_sdip_bin", return_value="fake-sdip"), \
-                patch.object(self.store.subprocess, "run", side_effect=runner), \
-                patch.object(self.store, "_zarr_array", return_value=SimpleNamespace(ndim=3)):
-            return self.store._convert_sdip("volume.sgy", self.out, self.messages.append)
-
-    def test_output_is_visible_before_converter_finishes(self):
-        def runner(command, **kwargs):
-            self.assertIs(kwargs["stderr"], subprocess.STDOUT)
-            kwargs["stdout"].write("live converter update\n")
-            kwargs["stdout"].flush()
-            self.assertIn("live converter update", (self.logs / "sdip_volume.log").read_text())
-            return SimpleNamespace(returncode=0)
-        self.assertTrue(self.run_converter(runner))
-        self.assertTrue(self.out.exists())
-
-    def test_failure_preserves_log_and_existing_fallback(self):
-        def runner(command, **kwargs):
-            kwargs["stdout"].write("converter could not read geometry\n")
-            return SimpleNamespace(returncode=2)
-        self.assertFalse(self.run_converter(runner))
-        self.assertFalse(self.out.exists())
-        self.assertIn("could not read geometry", (self.logs / "sdip_volume.log").read_text())
-        self.assertIn("built-in SEG-Y reader", self.messages[-1])
-
-    def test_timeout_preserves_partial_diagnostics(self):
-        def runner(command, **kwargs):
-            kwargs["stdout"].write("last update before timeout\n")
-            raise subprocess.TimeoutExpired(command, 1)
-        self.assertFalse(self.run_converter(runner))
-        self.assertIn("last update", (self.logs / "sdip_volume.log").read_text())
 
 
 if __name__ == "__main__":

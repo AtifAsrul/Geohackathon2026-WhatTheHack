@@ -42,8 +42,13 @@ def environment():
         line(True, "NCS foundation model code", f"transformers {transformers.__version__}")
     except Exception as e:
         line(False, "NCS foundation model code", f"{type(e).__name__}: {str(e)[:120]}")
-    sd = ROOT / ".venv-sdip" / "bin" / "sdip"
-    line(sd.exists(), "SDIP converter", str(sd) if sd.exists() else "not installed - built-in SEG-Y reader will be used")
+    try:
+        import openvds
+        from copilot import vds
+        exe = vds.importer_bin()
+        line(bool(exe), "OpenVDS reader and SEGYImport", exe or "importer not found - built-in reader will be used")
+    except Exception as e:
+        line(False, "OpenVDS", f"{e} - built-in SEG-Y reader will be used")
     line(config.RGT_WEIGHTS.exists(), "RGT-Est weights", "" if config.RGT_WEIGHTS.exists() else "missing - classical horizons will be used")
     for d in config.NCS_MODEL_DIRS:
         ok = (d / "model.safetensors").exists()

@@ -21,7 +21,7 @@ say() {
 }
 run() {
   local label="$1"; shift
-  "$PYBIN" -u scripts/terminal.py run --label "$label" -- "$@"
+  "$PYBIN" -u scripts/terminal.py run --label "$label" --sizes -- "$@"
   local code=$?
   if ((code == 130 || code == 143)); then exit "$code"; fi
   return "$code"
@@ -62,20 +62,8 @@ if ! run "Install NCS from GitHub" .venv/bin/python -m pip install --progress-ba
   optional "Install NCS from ZIP fallback" .venv/bin/python -m pip install --progress-bar on --no-deps "https://github.com/NorskRegnesentral/NCS_models/archive/refs/heads/main.zip"
 fi
 
-say 4 "SDIP converter (separate app environment)"
-if [ ! -x .venv-sdip/bin/sdip ]; then
-  if run "Create SDIP environment" "$PYBIN" -m venv .venv-sdip; then
-    optional "Upgrade SDIP pip" .venv-sdip/bin/python -m pip install --upgrade pip --progress-bar on
-    if ! run "Install SDIP from GitHub" .venv-sdip/bin/python -m pip install --progress-bar on "git+https://github.com/zahidaramai/sdip@v1.7.0"; then
-      optional "Install SDIP from ZIP fallback" .venv-sdip/bin/python -m pip install --progress-bar on "https://github.com/zahidaramai/sdip/archive/refs/tags/v1.7.0.zip"
-    fi
-  else
-    WARNINGS=$((WARNINGS + 1))
-    echo "[WARNING] SDIP environment unavailable; built-in SEG-Y reader will be used."
-  fi
-else
-  echo "[REUSE] Existing SDIP converter"
-fi
+say 4 "OpenVDS converter and reader (app environment only)"
+optional "Install OpenVDS wheel" .venv/bin/python -m pip install --progress-bar on --only-binary=:all: "openvds==3.4.9"
 
 say 5 "Pretrained models (about 1 GB total)"
 optional "Download RGT-Est and NCS models" .venv/bin/python -u scripts/download_models.py

@@ -1,15 +1,13 @@
 """SEG-Y -> AI-ready store, and fast access to the converted volumes.
 
 Conversion order:
-  1. SDIP (github.com/zahidaramai/sdip): lossless SEG-Y -> MDIO / Zarr v3.
-  2. If SDIP is not installed or refuses the file: read with segyio into a plain
-     NumPy store. The rest of the app works the same with either.
+  1. OpenVDS SEGYImport: lossless SEG-Y -> local VDS (Zip, LOD 0).
+  2. If OpenVDS is unavailable or refuses the file: segyio -> NumPy store.
+Legacy MDIO stores remain readable; existing conversions are reused.
 """
 import math
 import os
 import re
-import shutil
-import subprocess
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -111,46 +109,24 @@ def segy_affine(path, il_byte=189, xl_byte=193):
     return {"x0": cx[0], "xi": cx[1], "xx": cx[2], "y0": cy[0], "yi": cy[1], "yx": cy[2], "rms_m": resid}
 
 
-def _sdip_bin():
-    if os.environ.get("COPILOT_NO_SDIP") == "1":
+def _convert_openvds(src, output, log):
+    if os.environ.get("COPILOT_NO_OPENVDS") == "1":
+        log("OpenVDS disabled - using the built-in SEG-Y reader")
         return None
-    cands = [os.environ.get("SDIP_BIN"), str(config.ROOT / ".venv-sdip" / "bin" / "sdip"), shutil.which("sdip")]
-    for c in cands:
-        if c and Path(c).exists():
-            return c
-    return None
-
-
-def _convert_sdip(src, out, log):
-    """SEG-Y -> MDIO/Zarr v3 through the SDIP command line. Returns True on success."""
-    exe = _sdip_bin()
-    if not exe:
-        log("SDIP is not installed - using the built-in SEG-Y reader instead")
-        return False
-    cmd = [exe, "ingest", str(src), str(out), "--overwrite", "--envelope-gib", "0"]
-    logfile = config.LOGS / f"sdip_{Path(out).stem}.log"
-    log(f"SDIP conversion active; live output: {logfile}")
     try:
-        with logfile.open("w", encoding="utf-8") as stream:
-            r = subprocess.run(cmd, stdout=stream, stderr=subprocess.STDOUT, timeout=8 * 3600)
+        from . import vds
+        import openvds  # Verify both the reader and importer before scanning geometry.
+        if not vds.importer_bin():
+            raise RuntimeError("OpenVDS SEGYImport executable was not found")
+        f, ilb, xlb = _open_segy(src)
+        with f:
+            geometry = (np.asarray(f.ilines).copy(), np.asarray(f.xlines).copy(),
+                        np.asarray(f.samples, dtype=np.float64).copy(), ilb, xlb, int(f.sorting) == 1)
+        metrics = vds.import_segy(src, output, geometry, config.LOGS / f"openvds_{Path(output).stem}.log", log)
+        return geometry, metrics
     except Exception as e:
-        log(f"SDIP could not run ({e}) - using the built-in SEG-Y reader")
-        return False
-    if r.returncode != 0:
-        with logfile.open("rb") as stream:
-            stream.seek(max(0, logfile.stat().st_size - 4096))
-            tail = (stream.read().decode("utf-8", errors="replace").strip().splitlines() or ["no message"])[-1]
-        log(f"SDIP refused this file ({tail[:160]}) - using the built-in SEG-Y reader")
-        shutil.rmtree(out, ignore_errors=True)
-        return False
-    try:
-        a = _zarr_array(out, "amplitude")
-        assert a.ndim == 3
-        return True
-    except Exception as e:
-        log(f"SDIP store could not be opened ({e}) - using the built-in SEG-Y reader")
-        shutil.rmtree(out, ignore_errors=True)
-        return False
+        log(f"OpenVDS could not convert this file ({type(e).__name__}: {str(e)[:600]}) - using the built-in SEG-Y reader")
+        return None
 
 
 def _zarr_array(store, name):
@@ -208,27 +184,19 @@ def ingest(source, log=print, force=False):
     meta_path = config.STORES / f"{name}.json"
     old = read_json(meta_path)
     if old and not force and Path(old["path"]).exists() and old.get("source") == str(source):
+        log(f"Reusing {source.name}: {old.get('converter', old.get('kind', 'existing store'))}")
         return old
     role, label = guess_role(source.name)
     log(f"Converting {source.name} to an AI-ready store")
 
-    mdio_path = config.STORES / f"{name}.mdio"
+    vds_path = config.STORES / f"{name}.vds"
     npy_path = config.STORES / f"{name}.npstore"
     ilb, xlb = 189, 193
-    if _convert_sdip(source, mdio_path, log):
-        kind, path, converter = "mdio", mdio_path, "SDIP (MDIO / Zarr v3, lossless)"
-        ilines = np.asarray(_zarr_array(mdio_path, "inline")[:])
-        xlines = np.asarray(_zarr_array(mdio_path, "crossline")[:])
-        # the vertical axis is called "time" (or "depth") by the MDIO template
-        samples = None
-        for nm in ("time", "depth", "sample"):
-            try:
-                samples = np.asarray(_zarr_array(mdio_path, nm)[:], dtype=np.float64)
-                break
-            except Exception:
-                continue
-        if samples is None:
-            samples = np.arange(_zarr_array(mdio_path, "amplitude").shape[2], dtype=np.float64)
+    converted = _convert_openvds(source, vds_path, log)
+    metrics = None
+    if converted:
+        (ilines, xlines, samples, ilb, xlb, _), metrics = converted
+        kind, path, converter = "vds", vds_path, "OpenVDS (local VDS, lossless Zip)"
     else:
         ilines, xlines, samples, ilb, xlb = _convert_segyio(source, npy_path, log)
         kind, path, converter = "npy", npy_path, "segyio (NumPy store)"
@@ -238,18 +206,6 @@ def ingest(source, log=print, force=False):
         affine = segy_affine(source, ilb, xlb)
     except Exception as e:
         log(f"could not read X/Y coordinates from trace headers: {e}")
-    if affine is None and kind == "mdio":
-        try:
-            cx = np.asarray(_zarr_array(mdio_path, "cdp_x")[:], dtype=np.float64)
-            cy = np.asarray(_zarr_array(mdio_path, "cdp_y")[:], dtype=np.float64)
-            I, X = np.meshgrid(ilines, xlines, indexing="ij")
-            ok = (cx != 0) & np.isfinite(cx)
-            A = np.stack([np.ones(ok.sum()), I[ok], X[ok]], axis=1)
-            c1, *_ = np.linalg.lstsq(A, cx[ok], rcond=None)
-            c2, *_ = np.linalg.lstsq(A, cy[ok], rcond=None)
-            affine = {"x0": c1[0], "xi": c1[1], "xx": c1[2], "y0": c2[0], "yi": c2[1], "yx": c2[2], "rms_m": 0.0}
-        except Exception:
-            affine = None
 
     meta = {
         "name": name, "label": label, "role": role, "source": str(source), "kind": kind, "path": str(path),
@@ -257,6 +213,8 @@ def ingest(source, log=print, force=False):
         "ilines": [int(v) for v in ilines], "xlines": [int(v) for v in xlines],
         "samples": [float(v) for v in samples], "affine": affine,
     }
+    if metrics:
+        meta["conversion"] = metrics
     vol = Volume(meta)
     meta["stats"] = vol.compute_stats()
     write_json(meta_path, meta)
@@ -284,7 +242,10 @@ class Volume:
     # -- raw array -------------------------------------------------------
     def lazy(self):
         if self._lazy is None:
-            if self.meta["kind"] == "mdio":
+            if self.meta["kind"] == "vds":
+                from .vds import VDSArray
+                self._lazy = VDSArray(self.meta["path"])
+            elif self.meta["kind"] == "mdio":
                 self._lazy = _zarr_array(self.meta["path"], "amplitude")
             else:
                 self._lazy = np.load(Path(self.meta["path"]) / "amplitude.npy", mmap_mode="r")

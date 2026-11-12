@@ -3,7 +3,7 @@
     python -m copilot.pipeline --data /path/to/challenge/folder
 
 Steps (each one saves its result, so a re-run only redoes what is missing):
-  convert  SEG-Y -> AI-ready stores (SDIP, or segyio if SDIP cannot)
+  convert  SEG-Y -> local OpenVDS stores (or segyio if OpenVDS cannot)
   wells    well list, deviations, checkshots, LAS logs
   grid     thin all volumes onto one interpretation grid
   rgt      Relative Geologic Time with RGT-Est            (GPU through Slurm if possible)

@@ -11,7 +11,7 @@ Built for the APGCE 2026 GeoHackathon, Challenge 1. It runs entirely on the hack
 
 | Step | What happens | Built on |
 |---|---|---|
-| 1. Load | Every SEG-Y volume (stacks and inversion products) is converted to an AI-ready MDIO / Zarr v3 store, losslessly. Wells (list, deviations, checkshots, LAS logs) are read and placed in the seismic. | [SDIP](https://github.com/zahidaramai/sdip), segyio, lasio |
+| 1. Load | SEG-Y volumes become local OpenVDS files with lossless Zip compression and full-resolution reads. Geometry is checked before a store is published. Wells are read and placed in the seismic. | [OpenVDS](https://pypi.org/project/openvds/), segyio, lasio |
 | 2. View | Inline / crossline sections and time slices with linked crosshairs, zoom, every volume, overlays for horizons, faults, facies, wells and leads. | plain JavaScript canvas |
 | 3. Interpret | Relative Geologic Time for the whole cube, horizons as iso-RGT surfaces, fault likelihood, seismic facies from foundation-model features, spill-point trap analysis, sand bodies, well ties. | [RGT-Est](https://github.com/douyimin/RGT-Est), [NCS models](https://github.com/NorskRegnesentral/NCS_models) |
 | 4. Rank | Each trap becomes a *lead* with transparent scores for trap, reservoir, seal and hydrocarbon indicators, and a list of numbered facts for, against and unknown. | this repository |
@@ -52,7 +52,7 @@ Every heavy component has a fallback, so the app always produces a result and sa
 
 | Component | First choice | Fallback |
 |---|---|---|
-| SEG-Y conversion | SDIP → MDIO / Zarr v3 | segyio → NumPy store |
+| SEG-Y conversion | OpenVDS → local lossless VDS | segyio → NumPy store |
 | Relative geologic time | RGT-Est on a GPU through Slurm | RGT-Est on CPU, then a classical dip-steered RGT |
 | Seismic facies | NCS 2.5D foundation model | NCS 2D, then Sheng et al. SFM (if its checkpoint is supplied), then classical attributes |
 | Assistant | Gemma on the HPC | clear message that it is offline; viewer and leads still work |
@@ -70,6 +70,8 @@ In the page: **Import data** → **Run interpretation** → ask. A plain-languag
 Without the page: `.venv/bin/python -m copilot.pipeline --data /path/to/data`.
 
 Setup/start now show terminal stage bars, elapsed-time heartbeats and local log output.
+Size reports show model/store/interpretation/log sizes and measured net growth every 30 seconds.
+OpenVDS import logs report input/output sizes, elapsed time and end-to-end source MB/s.
 To watch an existing run without restarting it: `.venv/bin/python -u scripts/terminal.py watch`.
 The monitor reads only this app's status and logs; it does not change Slurm jobs or system settings.
 See [Watching progress and debugging](HPC_GUIDE.md#watching-progress-and-debugging) for log paths
@@ -101,7 +103,9 @@ HPC. Seismic and well data stay where they are.
 
 ## Credits and licences
 
-* SDIP — Zahid Aramai, Apache-2.0.
+* OpenVDS — The Open Group / Bluware. The app uses the pinned PyPI binary distribution;
+  see [package licensing](https://pypi.org/project/openvds/) for the terms of that distribution.
+* Existing SDIP/MDIO stores remain readable for compatibility; SDIP is no longer installed or invoked.
 * RGT-Est — Dou, Wu, Gao, Bi (2026), *Learning Stratigraphically Consistent Relative Geologic Time from 3D
   Seismic Data via Sinusoidal Mapping*; code MIT, weights CC BY 4.0. The iso-surface extraction follows the
   helper shipped with RGT-Est (Xinming Wu).
