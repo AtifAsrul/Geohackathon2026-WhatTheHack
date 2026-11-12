@@ -1,0 +1,119 @@
+/* Colour, type and motion tokens. Every colour in the interface comes from here, so a theme is one block.
+   Theme is set by data-theme on <html> (see the inline script in index.html). Each view remembers its own:
+   the Interpreter starts dark, the Decision brief starts light. */
+
+@font-face { font-family: "Geist"; font-weight: 100 900; font-display: swap; src: url("../fonts/Geist-Variable.woff2") format("woff2"); }
+@font-face { font-family: "Geist Mono"; font-weight: 100 900; font-display: swap; src: url("../fonts/GeistMono-Variable.woff2") format("woff2"); }
+
+:root {
+  color-scheme: dark;
+  /* surfaces: near-black, stepped by fill, no borders between them */
+  --bg-deep: #0a0a0a;
+  --bg: #111111;
+  --surface: #181818;
+  --raised: #222222;
+  --hairline: rgba(244, 242, 239, 0.08);
+  --hairline-strong: rgba(244, 242, 239, 0.4);
+  /* text */
+  --text: #f4f2ef;
+  --text-2: #b5b2ad;
+  --text-3: #918e89;
+  /* the one accent: branding orange. --accent is for text and lines, --solid for fills. */
+  --accent: #f26a1b;
+  --accent-ink: #111111;
+  --accent-soft: rgba(232, 80, 2, 0.16);
+  --solid: #e85002;
+  --solid-ink: #111111;
+  /* the branding gradient, used in a few chosen places only */
+  --grad-0: #000000;
+  --grad-1: #c10801;
+  --grad-2: #f16001;
+  --grad-3: #d9c3ab;
+  --bar-a: #c10801;
+  --bar-b: #f16001;
+  /* primary button: off-white on dark, black on light. The one orange button is "new question". */
+  --btn: #f4f2ef;
+  --btn-ink: #111111;
+  /* a selected pill: deep orange fill, brighter orange edge */
+  --pill: #222222;
+  --pill-edge: rgba(244, 242, 239, 0.1);
+  --pill-hover: #2e2e2e;
+  --pill-edge-hover: rgba(244, 242, 239, 0.28);
+  --pill-on: #6b2400;
+  --pill-on-hover: #7f2b00;
+  --pill-on-edge: #e85002;
+  --pill-on-ink: #f4f2ef;
+  /* the hero card on the Decision brief is dark in both themes */
+  --hero-bg: #0a0a0a;
+  --hero-ink: #f4f2ef;
+  --hero-ink-2: #b5b2ad;
+  /* frosted panels that float over the map; calm mode makes them solid */
+  --glass: rgba(34, 34, 34, 0.78);
+  --ring-gradient: linear-gradient(100deg, var(--grad-2), var(--grad-3), var(--grad-2));
+  /* meaning only: well results and a real caution */
+  --discovery: #62c2a2;
+  --dry: #e58466;
+  --warn: #e3b25a;
+  /* drawn over the map image, which keeps its own colours in both themes */
+  --map-ink: #f4efe6;
+  --map-shade: rgba(10, 10, 10, 0.72);
+  /* seismic section */
+  --sec-zero: #111111;
+  --sec-pos: #f2b65c;
+  --sec-neg: #5fbccf;
+  --sec-band: rgba(244, 242, 239, 0.07);
+  --sec-line: rgba(244, 242, 239, 0.55);
+  --sand: #fec44f;
+  --sand-wash: rgba(254, 196, 79, 0.1);
+
+  --font: "Geist", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Arial, sans-serif;
+  --mono: "Geist Mono", ui-monospace, Menlo, "DejaVu Sans Mono", Consolas, monospace;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --r-s: 6px;
+  --r-m: 10px;
+  --r-l: 14px;
+  --control: 36px;
+  /* selection: a diagonal hatch, like a lithology pattern on a log */
+  --hatch: repeating-linear-gradient(135deg, var(--accent-soft) 0 2px, transparent 2px 7px);
+  --brand-gradient: linear-gradient(100deg, var(--grad-1), var(--grad-2) 60%, var(--grad-3));
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  /* cool light grey */
+  --bg-deep: #dfe2e6;
+  --bg: #eceef1;
+  --surface: #f8f9fa;
+  --raised: #e1e4e8;
+  --hairline: rgba(19, 20, 22, 0.1);
+  --hairline-strong: rgba(19, 20, 22, 0.45);
+  --text: #131416;
+  --text-2: #474a50;
+  --text-3: #595d64;
+  --accent: #ad3800;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(232, 80, 2, 0.13);
+  --btn: #131416;
+  --btn-ink: #ffffff;
+  /* light: white pills with a grey edge; selected is a soft orange tint with an orange edge and deep orange text */
+  --pill: #ffffff;
+  --pill-edge: rgba(19, 20, 22, 0.16);
+  --pill-hover: #f3f4f6;
+  --pill-edge-hover: rgba(19, 20, 22, 0.36);
+  --pill-on: #ffdcc8;
+  --pill-on-hover: #ffcdb0;
+  --pill-on-edge: #e85002;
+  --pill-on-ink: #5c1f00;
+  --glass: rgba(248, 249, 250, 0.8);
+  --ring-gradient: linear-gradient(100deg, var(--grad-1), var(--grad-2), var(--grad-1));
+  --discovery: #17694f;
+  --dry: #a53c21;
+  --warn: #7a4f00;
+  --sec-zero: #f8f9fa;
+  --sec-pos: #a8501a;
+  --sec-neg: #1c6a86;
+  --sec-band: rgba(19, 20, 22, 0.06);
+  --sec-line: rgba(19, 20, 22, 0.55);
+  --sand: #b56a10;
+  --sand-wash: rgba(181, 106, 16, 0.1);
+}

@@ -1,20 +1,25 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Exploration Copilot</title>
+<script>try { if (localStorage.getItem("copilot.theme") === "light") document.documentElement.dataset.theme = "light"; } catch (e) {}</script>
+<link rel="stylesheet" href="/static/css/tokens.css">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+<a class="skip" href="#chat-input">Skip to the question box</a>
+<div id="status-line" class="sr-only" role="status"></div>
 <header>
   <div class="brand"><span class="mark">◈</span> Exploration Copilot</div>
   <div class="pills">
     <span class="pill" id="pill-data"><i></i><span>No data yet</span></span>
     <span class="pill" id="pill-interp"><i></i><span>Not interpreted</span></span>
-    <span class="pill" id="pill-llm"><i></i><span>Assistant</span></span>
+    <span class="pill" id="pill-llm" tabindex="0"><i></i><span>Assistant</span></span>
   </div>
   <div class="actions">
+    <button id="btn-theme" class="icon-btn" type="button" aria-label="Switch to light theme" aria-pressed="false"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg></button>
     <button id="btn-import" class="ghost">Import data</button>
     <button id="btn-run" class="primary">Run interpretation</button>
   </div>
@@ -30,9 +35,8 @@
     <div class="toolbar">
       <label>Volume <select id="sel-vol"></select></label>
       <label>Colours <select id="sel-cmap">
-        <option value="gray">Grey</option><option value="seismic">Red / blue</option>
-        <option value="viridis">Viridis</option><option value="rainbow">Rainbow</option></select></label>
-      <label>Contrast <button class="mini" id="gain-down">−</button><button class="mini" id="gain-up">+</button></label>
+        <option value="gray">Grey</option><option value="seismic">Red / blue</option></select></label>
+      <label>Contrast <button class="mini" id="gain-down" aria-label="Less contrast">−</button><button class="mini" id="gain-up" aria-label="More contrast">+</button></label>
       <span class="sep"></span>
       <span class="layers" id="layers">
         <button data-layer="horizons" class="chip on" title="Horizons from the RGT cube (solid lines, H1, H2 ...)">Horizons · RGT</button>
@@ -44,74 +48,81 @@
         <button data-layer="leads" class="chip on">Leads</button>
         <button data-layer="similar" class="chip hidden" id="chip-similar">Look-alikes</button>
       </span>
+      <button class="ghost hidden" id="chat-open" type="button">Assistant</button>
     </div>
     <div class="panels">
       <div class="panel" id="p-section">
         <div class="phead">
-          <div class="tabs" id="tabs-axis">
-            <button data-axis="i" class="on">Inline</button><button data-axis="x">Crossline</button>
+          <div class="tabs" id="tabs-axis" role="tablist" aria-label="Section direction">
+            <button data-axis="i" class="on" role="tab" aria-controls="cv-section">Inline</button><button data-axis="x" role="tab" aria-controls="cv-section">Crossline</button>
           </div>
           <div class="stepper">
-            <button class="mini" id="line-prev">◀</button>
+            <button class="mini" id="line-prev" aria-label="Previous line">◀</button>
             <input type="number" id="line-num">
-            <button class="mini" id="line-next">▶</button>
+            <button class="mini" id="line-next" aria-label="Next line">▶</button>
           </div>
           <input type="range" id="line-slider" class="slider">
         </div>
-        <div class="canvas-wrap"><canvas id="cv-section"></canvas><div class="empty" id="empty-section"></div>
-          <div class="zoomer" data-panel="sec" title="Zoom. You can also hold Ctrl and scroll, then drag to move."><button data-z="in">+</button><button data-z="out">−</button><button data-z="fit" title="Show everything">⤢</button></div></div>
+        <div class="canvas-wrap"><canvas id="cv-section" role="img" aria-label="Seismic section"></canvas><div class="empty" id="empty-section"></div>
+          <div class="zoomer" data-panel="sec"><button type="button" data-z="in" aria-label="Zoom in">+</button><button type="button" data-z="out" aria-label="Zoom out">−</button><button type="button" data-z="fit" aria-label="Show everything">⤢</button></div></div>
       </div>
       <div class="panel" id="p-map">
         <div class="phead">
-          <div class="tabs" id="tabs-map">
-            <button data-map="slice" class="on">Time slice</button><button data-map="horizon">Horizon map</button><button data-map="logs">Well logs</button>
+          <div class="tabs" id="tabs-map" role="tablist" aria-label="Map view">
+            <button data-map="slice" class="on" role="tab" aria-controls="cv-map">Time slice</button><button data-map="horizon" role="tab" aria-controls="cv-map">Horizon map</button><button data-map="logs" role="tab" aria-controls="cv-map">Well logs</button>
           </div>
           <div class="stepper" id="time-stepper">
-            <button class="mini" id="time-prev">◀</button>
+            <button class="mini" id="time-prev" aria-label="Earlier time">◀</button>
             <input type="number" id="time-num"><span class="unit">ms</span>
-            <button class="mini" id="time-next">▶</button>
+            <button class="mini" id="time-next" aria-label="Later time">▶</button>
           </div>
           <div class="stepper hidden" id="hz-controls">
             <select id="sel-hz"></select><select id="sel-attr"></select>
           </div>
           <div class="stepper hidden" id="log-controls">
             <select id="sel-well"></select>
-            <div class="tabs" id="tabs-logaxis"><button data-la="time" class="on">Time</button><button data-la="depth">Depth</button></div>
+            <div class="tabs" id="tabs-logaxis" role="tablist" aria-label="Log depth axis"><button data-la="time" class="on" role="tab" aria-controls="cv-logs">Time</button><button data-la="depth" role="tab" aria-controls="cv-logs">Depth</button></div>
           </div>
           <input type="range" id="time-slider" class="slider">
         </div>
-        <div class="canvas-wrap"><canvas id="cv-map"></canvas><canvas id="cv-logs" class="hidden"></canvas><div class="empty" id="empty-map"></div>
-          <div class="zoomer" data-panel="map" title="Zoom. You can also hold Ctrl and scroll, then drag to move."><button data-z="in">+</button><button data-z="out">−</button><button data-z="fit" title="Show everything">⤢</button></div></div>
+        <div class="canvas-wrap"><canvas id="cv-map" role="img" aria-label="Time slice or horizon map"></canvas><canvas id="cv-logs" class="hidden" role="img" aria-label="Well logs"></canvas><div class="empty" id="empty-map"></div>
+          <div class="zoomer" data-panel="map"><button type="button" data-z="in" aria-label="Zoom in">+</button><button type="button" data-z="out" aria-label="Zoom out">−</button><button type="button" data-z="fit" aria-label="Show everything">⤢</button></div></div>
       </div>
     </div>
     <div class="readout">
-      <span id="readout">Click a picture to move the crosshair. Scroll to step through lines. Ctrl + scroll to zoom, drag to move, double-click to reset.</span>
-      <button class="ghost small" id="btn-similar" title="Find other places whose seismic looks like the crosshair spot">Find look-alikes</button>
-      <button class="ghost small" id="btn-explain" title="Ask the assistant about the crosshair spot">Explain this spot</button>
+      <span id="readout">Point at a picture to read the position.</span>
+      <details class="navhelp" id="navhelp"><summary class="linkish">How to navigate</summary>
+        <div class="navhelp-body">Click a picture to move the crosshair. Scroll to step through lines. Ctrl + scroll to zoom, drag to move, double-click to reset.</div></details>
+      <button class="ghost small" id="btn-similar">Find look-alikes</button>
+      <button class="ghost small" id="btn-explain">Explain this spot</button>
     </div>
   </section>
 
   <section id="side">
+    <div class="grip" id="chat-grip" role="separator" aria-orientation="vertical" aria-label="Resize the assistant panel" tabindex="0"></div>
     <div class="tabs big" id="tabs-side">
-      <button data-side="chat" class="on">Assistant</button>
-      <button data-side="leads">Leads</button>
-      <button data-side="wells">Wells</button>
-      <button data-side="about">How it works</button>
+      <div class="tablist-inner" role="tablist" aria-label="Side panel">
+      <button data-side="chat" class="on" role="tab" id="tab-chat" aria-controls="side-chat">Assistant</button>
+      <button data-side="leads" role="tab" id="tab-leads" aria-controls="side-leads">Leads</button>
+      <button data-side="wells" role="tab" id="tab-wells" aria-controls="side-wells">Wells</button>
+      <button data-side="about" role="tab" id="tab-about" aria-controls="side-about">How it works</button>
+      </div>
+      <button class="mini side-close" id="chat-close" type="button" aria-label="Close the assistant panel">×</button>
     </div>
-    <div class="side-body" id="side-chat">
+    <div class="side-body" id="side-chat" role="tabpanel" aria-labelledby="tab-chat">
       <div id="messages"></div>
       <div id="suggest"></div>
       <form id="chat-form">
         <textarea id="chat-input" rows="2" placeholder="Ask about the geology, a lead, a well, or what you are looking at…"></textarea>
         <div class="chat-row">
           <label class="check"><input type="checkbox" id="attach-view"> Show the assistant my section and time slice</label>
-          <button class="primary" id="chat-send" type="submit">Ask</button>
+          <button class="primary send" id="chat-send" type="submit" aria-label="Ask"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
         </div>
       </form>
     </div>
-    <div class="side-body hidden" id="side-leads"></div>
-    <div class="side-body hidden" id="side-wells"></div>
-    <div class="side-body hidden" id="side-about"></div>
+    <div class="side-body hidden" id="side-leads" role="tabpanel" aria-labelledby="tab-leads"></div>
+    <div class="side-body hidden" id="side-wells" role="tabpanel" aria-labelledby="tab-wells"></div>
+    <div class="side-body hidden" id="side-about" role="tabpanel" aria-labelledby="tab-about"></div>
   </section>
 </main>
 
