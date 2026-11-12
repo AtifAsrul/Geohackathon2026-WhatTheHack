@@ -33,7 +33,13 @@ RGT_WEIGHTS = MODELS / "rgt" / "RGT-Est_CIG-Benchmark.pt"
 NCS_MODEL_DIRS = [MODELS / "ncs" / "NCS-v1-2.5d-base", MODELS / "ncs" / "NCS-v1-2d-base"]
 SFM_WEIGHTS_DIR = MODELS / "sfm"     # optional: Sheng et al. SFM checkpoint (*.pth) placed by hand
 
-for _d in (WORKSPACE, STORES, INTERP, LOGS):
+# The assistant's own interpretation pass (pictures sent to the shared Gemma model).
+LLM_CACHE = WORKSPACE / "llm_cache"  # every answer is kept, so a stopped run resumes without asking again
+AI_MINUTES = float(os.environ.get("COPILOT_AI_MINUTES", "30"))     # time budget for that pass
+AI_WORKERS = int(os.environ.get("COPILOT_AI_WORKERS", "3"))        # requests sent at the same time (shared model)
+PROBE_FILE = WORKSPACE / "gemma_probe.json"
+
+for _d in (WORKSPACE, STORES, INTERP, LOGS, LLM_CACHE):
     _d.mkdir(parents=True, exist_ok=True)
 
 

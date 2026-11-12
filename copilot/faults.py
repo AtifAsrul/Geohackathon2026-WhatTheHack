@@ -3,25 +3,39 @@ import numpy as np
 from scipy.ndimage import gaussian_filter1d, label, uniform_filter
 
 
-def fault_likelihood(seis, log=print):
+def semblance(seis, lateral=3, vertical=9):
+    """Coherence cube, 0..1: how alike a trace is to its neighbours (3 x 3 traces, 9 samples).
+
+    1 = neighbouring traces are identical (unbroken reflectors); low = they differ (faults, channel edges, noise).
+    """
+    s = np.asarray(seis, dtype=np.float32)
+    num = uniform_filter(s, size=(lateral, lateral, 1)) ** 2
+    den = uniform_filter(s * s, size=(lateral, lateral, 1))
+    num = uniform_filter(num, size=(1, 1, vertical))
+    den = uniform_filter(den, size=(1, 1, vertical)) + 1e-12
+    return np.clip(num / den, 0, 1).astype(np.float32)
+
+
+def fault_likelihood(seis, log=print, live=None):
     """0..1 cube: high where neighbouring traces stop looking alike over a tall vertical window.
 
-    Semblance of a 3x3 trace neighbourhood (low at breaks), smoothed vertically so that
-    steep, tall features (faults) are kept and bed-parallel changes are suppressed.
+    Coherence (low at breaks), smoothed vertically so that steep, tall features (faults) are kept and
+    bed-parallel changes are suppressed. `live` (inline, crossline) marks traces with real data: empty
+    traces never count as faults and are left out of the scaling.
     """
-    log("Faults: measuring trace-to-trace similarity")
-    s = seis.astype(np.float32)
-    num = uniform_filter(s, size=(3, 3, 1)) ** 2
-    den = uniform_filter(s * s, size=(3, 3, 1))
-    num = uniform_filter(num, size=(1, 1, 9))
-    den = uniform_filter(den, size=(1, 1, 9)) + 1e-12
-    semb = np.clip(num / den, 0, 1)
-    del num, den
+    log("Faults: measuring trace-to-trace similarity (coherence)")
+    semb = semblance(seis)
     fl = gaussian_filter1d(1.0 - semb, sigma=8, axis=2)
     # remove the lateral background so dipping / noisy zones do not light up everywhere
     bg = uniform_filter(fl, size=(15, 15, 1))
     fl = fl - bg
-    hi = np.percentile(fl[::3, ::3, ::3], 99.7)
+    sub = fl[::3, ::3, ::3]
+    if live is not None and not live.all():
+        fl[~live] = 0.0
+        semb[~live] = 1.0
+        keep = live[::3, ::3]
+        sub = sub[keep] if keep.any() else sub
+    hi = np.percentile(sub, 99.7)
     fl = np.clip(fl / (hi + 1e-9), 0, 1)
     return fl.astype(np.float32), semb.astype(np.float32)
 

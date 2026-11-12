@@ -353,19 +353,72 @@ def derive_logs(log):
 
 
 # ------------------------------------------------------------------ putting it together
+def find_files(data_dir):
+    """Sort the files under a folder into well list / LAS logs / deviation surveys / checkshots.
+
+    A file is recognised by its own name or, failing that, by the name of the folder it sits in
+    (so 'deviations/m-1.txt' works as well as 'm-1_Deviation.txt').
+    """
+    out = {"list": [], "las": [], "dev": [], "chk": []}
+    root = Path(data_dir)
+    if not root.exists():
+        return out
+    for p in sorted(root.rglob("*")):
+        if not p.is_file() or p.name.startswith((".", "~")):
+            continue
+        low, par, ext = p.name.lower(), p.parent.name.lower(), p.suffix.lower()
+        if ext in (".xlsx", ".xlsm"):
+            out["list"].append(p)
+        elif ext == ".las":
+            out["las"].append(p)
+        elif ext in (".txt", ".csv", ".dev", ".dat", ".asc"):
+            if re.search(r"deviat|survey|traj", low) or re.search(r"deviat|survey|traj", par):
+                out["dev"].append(p)
+            elif re.search(r"check|\btd\b|timedepth|time_depth", low) or re.search(r"check|time_?depth", par):
+                out["chk"].append(p)
+    return out
+
+
+def _file_key(p):
+    s = re.sub(r"(?i)[_\- ]?(deviation|checkshot|survey|traj\w*|composite\w*|interp\w*)", "", Path(p).stem)
+    return norm(s)
+
+
+def scan(data_dir):
+    """Quick look at a folder for the import dialog: how many well files of each kind, and which wells."""
+    f = find_files(data_dir)
+    names = {}
+    for p in f["las"] + f["dev"] + f["chk"]:
+        names.setdefault(_file_key(p), Path(p).stem.split("_")[0])
+    return {"path": str(data_dir), "las": len(f["las"]), "deviation": len(f["dev"]), "checkshot": len(f["chk"]),
+            "well_list": len(f["list"]), "wells": sorted(names.values())}
+
+
+def td_time(z, depth, twt):
+    """Depth below sea level -> two-way time through a checkshot table.
+
+    Outside the table the last (or first) interval velocity is carried on, instead of freezing the time.
+    Returns (times, number of samples that had to be extrapolated below the table).
+    """
+    z = np.asarray(z, dtype=np.float64)
+    out = np.interp(z, depth, twt)
+    below = z > depth[-1]
+    if len(depth) >= 2:
+        v1 = (twt[-1] - twt[-2]) / max(depth[-1] - depth[-2], 1e-6)
+        out[below] = twt[-1] + (z[below] - depth[-1]) * v1
+        above = z < depth[0]
+        v0 = (twt[1] - twt[0]) / max(depth[1] - depth[0], 1e-6)
+        out[above] = np.maximum(twt[0] + (z[above] - depth[0]) * v0, 0.0)
+    return out, int(below.sum())
+
+
 def load_wells(data_dir, ref=None, log=print):
     """Read every well file under data_dir. Saves wells.json + wells_logs.npz and returns the summary."""
     data_dir = Path(data_dir)
     notes = []
-    files = [p for p in data_dir.rglob("*") if p.is_file()]
-    xlsx = [p for p in files if p.suffix.lower() in (".xlsx", ".xlsm")]
-    las = [p for p in files if p.suffix.lower() == ".las"]
-    dev = [p for p in files if re.search(r"deviat|survey|traj", p.name.lower()) and p.suffix.lower() in (".txt", ".csv", ".dev", ".dat")]
-    chk = [p for p in files if re.search(r"check|\btd\b|timedepth|time_depth", p.name.lower()) and p.suffix.lower() in (".txt", ".csv", ".dat")]
-
-    def key(p):
-        s = re.sub(r"(?i)[_\- ]?(deviation|checkshot|survey|traj\w*|composite\w*|interp\w*)", "", p.stem)
-        return norm(s)
+    found = find_files(data_dir)
+    xlsx, las, dev, chk = found["list"], found["las"], found["dev"], found["chk"]
+    key = _file_key
 
     wl = {}
     for p in xlsx:
@@ -446,7 +499,13 @@ def load_wells(data_dir, ref=None, log=print):
         tvdss = np.interp(md, path["md"], path["tvdss"])
         x = np.interp(md, path["md"], path["x"])
         y = np.interp(md, path["md"], path["y"])
-        twt = np.interp(tvdss, td[src][0], td[src][1]) if src else np.full(len(md), np.nan)
+        if src:
+            twt, n_below = td_time(tvdss, td[src][0], td[src][1])
+            if n_below:
+                w["notes"].append(f"the logs go {float(np.nanmax(tvdss) - td[src][0][-1]):.0f} m below the deepest "
+                                  f"checkshot point; times there are extrapolated with the last interval velocity")
+        else:
+            twt = np.full(len(md), np.nan)
         arrays[f"{k}__md"], arrays[f"{k}__tvdss"], arrays[f"{k}__twt"] = md, tvdss, twt
         arrays[f"{k}__x"], arrays[f"{k}__y"] = x, y
         if ref is not None and ref.meta.get("affine"):
@@ -493,6 +552,76 @@ def well_arrays(key):
         _npz_cache.update({"mt": mt, "data": {n: z[n] for n in z.files}})
     pre = f"{key}__"
     return {n[len(pre):]: v for n, v in _npz_cache["data"].items() if n.startswith(pre)}
+
+
+def log_zones(key, min_thick=2.0):
+    """Blocky reading of one well's logs: sand and shale intervals, pay, and the main boundaries.
+
+    Sand = shale volume below 0.4 (see derive_logs); pay = sand with the hydrocarbon flag over half of it.
+    Returns None if the well has no usable shale-volume / gamma-ray curve.
+    """
+    from scipy.ndimage import median_filter
+    a = well_arrays(key)
+    if "c_sand" not in a or "md" not in a:
+        return None
+    md, sand = a["md"], a["c_sand"]
+    ok = np.isfinite(sand)
+    if ok.sum() < 20:
+        return None
+    first, last = int(np.argmax(ok)), int(len(ok) - np.argmax(ok[::-1]))
+    dz = float(np.nanmedian(np.diff(md))) or 0.15
+    win = max(3, int(round(1.0 / max(dz, 1e-3))) | 1)
+    s = median_filter(np.where(ok, sand, 0.0), size=win) > 0.5
+
+    def runs(flag):
+        e = np.flatnonzero(np.diff(flag.astype(np.int8)) != 0) + 1
+        st, en = np.r_[first, e[(e > first) & (e < last)]], np.r_[e[(e > first) & (e < last)], last]
+        return [(int(p), int(q)) for p, q in zip(st, en) if q > p]
+
+    for _ in range(3):                                  # absorb beds thinner than min_thick into their neighbours
+        changed = False
+        for p, q in runs(s):
+            if md[q - 1] - md[p] < min_thick and p > first and q < last:
+                s[p:q] = ~s[p]
+                changed = True
+        if not changed:
+            break
+    twt = a.get("twt", np.full(len(md), np.nan))
+    tv = a.get("tvdss", np.full(len(md), np.nan))
+
+    def avg(c, p, q):
+        v = a.get(f"c_{c}")
+        return None if v is None or not np.isfinite(v[p:q]).any() else round(float(np.nanmean(v[p:q])), 4)
+
+    def t(v):
+        return None if not np.isfinite(v) else round(float(v), 1)
+
+    sands, bounds, net, pay = [], [], 0.0, 0.0
+    for p, q in runs(s):
+        if not s[p]:
+            continue
+        th = float(md[q - 1] - md[p])
+        hc = avg("hc", p, q)
+        z = {"top_md": round(float(md[p]), 1), "base_md": round(float(md[q - 1]), 1), "thick_m": round(th, 1),
+             "top_tvdss": t(tv[p]), "base_tvdss": t(tv[q - 1]), "top_twt": t(twt[p]), "base_twt": t(twt[q - 1]),
+             "vsh": avg("vsh", p, q), "phi": avg("phi", p, q), "rt": avg("rt", p, q), "hc_frac": hc,
+             "pay": bool(hc is not None and hc > 0.5)}
+        sands.append(z)
+        net += th
+        pay += th if z["pay"] else 0.0
+        if th >= 5.0:
+            bounds.append({"md": z["top_md"], "twt": z["top_twt"], "kind": "top of sand (shale over sand)", "thick_m": z["thick_m"]})
+            bounds.append({"md": z["base_md"], "twt": z["base_twt"], "kind": "base of sand (sand over shale)", "thick_m": z["thick_m"]})
+    gross = float(md[last - 1] - md[first])
+    for n, z in enumerate(sorted(sands, key=lambda q: q["top_md"])):
+        z["id"] = f"S{n + 1}"
+    big = sorted(sands, key=lambda q: -q["thick_m"])
+    return {"summary": {"logged_from_md": round(float(md[first]), 1), "logged_to_md": round(float(md[last - 1]), 1),
+                        "gross_m": round(gross, 1), "net_sand_m": round(net, 1),
+                        "net_to_gross": round(net / gross, 3) if gross > 0 else None, "net_pay_m": round(pay, 1),
+                        "sand_count": len(sands), "thickest_sand": big[0]["id"] if big else None,
+                        "has_fluid_flag": "c_hc" in a},
+            "sands": sorted(big[:40], key=lambda q: q["top_md"]), "boundaries": bounds}
 
 
 def interval_summary(key, t_top, t_base):

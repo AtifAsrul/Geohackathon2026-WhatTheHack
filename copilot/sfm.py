@@ -16,7 +16,6 @@ import shutil
 from pathlib import Path
 
 import numpy as np
-from scipy.ndimage import uniform_filter
 
 from . import config
 
@@ -159,10 +158,9 @@ def sheng_features(seis, ckpt, device, log=print):
 def classical_features(seis, extra=None, block=8, log=print):
     """Texture attributes on a coarse grid: amplitude level, continuity, frequency, plus rock properties."""
     log("Facies: computing classical texture attributes")
+    from .faults import semblance
     s = seis.astype(np.float32)
-    num = uniform_filter(s, size=(3, 3, 1)) ** 2
-    den = uniform_filter(s * s, size=(3, 3, 1)) + 1e-12
-    semb = np.clip(uniform_filter(num, (1, 1, 9)) / uniform_filter(den, (1, 1, 9)), 0, 1)
+    semb = semblance(s)
     dsdt = np.gradient(s, axis=2)
 
     def pool(a):

@@ -3,49 +3,52 @@
 Follow the parts in order. Type each command exactly, one line at a time, and press Enter after each.
 Tip: you can copy a line here and paste it into the HPC terminal with **Ctrl + Shift + V**.
 
----
-
-## Part A — Put the app on GitHub (on your laptop, about 5 minutes)
-
-You need this anyway: the hackathon asks for a public GitHub repository.
-
-1. Unzip `exploration-copilot.zip` (right-click it → **Extract All**). You get a folder called `exploration-copilot`.
-2. Go to **github.com** and sign in (create a free account if you have none).
-3. Click the **+** at the top right → **New repository**.
-4. Repository name: `exploration-copilot`. Choose **Public**. Click **Create repository**.
-5. On the next page click the link **uploading an existing file**.
-6. Open the `exploration-copilot` folder on your laptop. Press **Ctrl + A** to select everything inside it,
-   and drag it all onto the GitHub page.
-7. Wait until the files are listed, then click the green **Commit changes** button.
-
-Write down your GitHub user name. Below it is shown as `YOURNAME`.
+**Already have an older copy on the HPC?** Go straight to
+[Updating to this version](#updating-to-this-version), then come back to Part D.
 
 ---
 
-## Part B — Install on the HPC (once, about 20 minutes, mostly waiting)
+## Part A — Repository and prerequisites
+
+Use [AtifAsrul/exploration-copilot](https://github.com/AtifAsrul/exploration-copilot), branch `main`.
+The repository contains code; challenge data, models, environments and interpretation results stay on the HPC.
+
+Before installing, check `python3 --version`, `git --version`, and `df -h .` in your writable HPC
+project folder. Setup needs internet access for Python packages and roughly 1 GB of model weights;
+PyTorch and converted seismic stores need additional space. Installation time depends on the network.
+Use the organisers' supported Python environment if the system Python cannot install the requirements.
+Do not use `sudo` or change the system Python.
+
+---
+
+## Part B — Install on the HPC (once)
 
 1. Connect with RustDesk and log in, as in the organisers' manual.
 2. Open a terminal: top-left menu **Applications → System Tools → Terminal**.
-3. Type these four lines (replace `YOURNAME`):
+3. Type these four lines. If the folder already exists, use the update section instead:
 
 ```
 cd /data/epic20/APGCE/$USER
-git clone https://github.com/YOURNAME/exploration-copilot.git
+git clone https://github.com/AtifAsrul/exploration-copilot.git
 cd exploration-copilot
 bash setup.sh
 ```
 
 4. Wait. Text scrolls by while it installs and downloads the models. It ends with a list called
-   **Self-check**. `[OK]` means ready. `[--]` means that piece is missing; the app still works with a
-   simpler method for it, but send me the list so I can help.
+   **Self-check**. Read each `[--]`: it identifies a missing component or unavailable service. Some
+   components have fallbacks; an unavailable Gemma service means chat is offline. A zero exit code
+   from the self-check does not mean every component passed. Required package failures stop setup.
+
+5. Check the assistant's image support with `.venv/bin/python scripts/gemma_probe.py`.
+   This uses made-up test pictures. Review any `[--]` results before relying on visual interpretations.
 
 If a line fails:
 
 | What you see | What to type instead |
 |---|---|
 | `cd: /data/epic20/APGCE/...: No such file or directory` | `ls /data/epic20/APGCE/` to see your team's folder name, then `cd /data/epic20/APGCE/that_name` |
-| `git: command not found` | `curl -L -o ec.zip https://github.com/YOURNAME/exploration-copilot/archive/refs/heads/main.zip` then `unzip ec.zip` then `cd exploration-copilot-main` then `bash setup.sh` |
-| GitHub cannot be reached at all | In RustDesk use the **file transfer** button to copy `exploration-copilot.zip` to the HPC, then `unzip exploration-copilot.zip`, `cd exploration-copilot`, `bash setup.sh` |
+| `git: command not found` | `curl -L -o ec.zip https://github.com/AtifAsrul/exploration-copilot/archive/refs/heads/main.zip` then `unzip ec.zip` then `cd exploration-copilot-main` then `bash setup.sh`. This ZIP copy cannot use `git pull`; use a fresh ZIP in a separate folder for later updates. |
+| GitHub cannot be reached at all | In RustDesk use the **file transfer** button to copy `exploration-copilot-v4.zip` to the HPC, then `unzip exploration-copilot-v4.zip`, `cd exploration-copilot`, `bash setup.sh` |
 
 ---
 
@@ -59,6 +62,69 @@ bash start.sh
 
 Firefox opens by itself. If it does not, open Firefox and type `http://127.0.0.1:8050` in the address bar.
 Keep the terminal window open while you use the app.
+Use Firefox **inside the HPC remote desktop**. If 8050 is busy, use the address printed by the server.
+For an SSH-only connection, forward the printed port from your laptop, for example
+`ssh -N -L 8050:127.0.0.1:8050 YOUR_HPC_USER@YOUR_HPC_HOST`, using your approved access route,
+then open `http://127.0.0.1:8050` on your laptop. Substitute the printed port if it differs.
+
+If you previously used a custom workspace, set it in this terminal before checks and startup:
+`export COPILOT_WORKSPACE="/absolute/path/to/your/existing/workspace"`.
+Use that same value for setup, the image probe, the pipeline and the monitor. The default is
+`workspace/` inside the checkout. Keep an existing workspace when you want to reuse its results.
+
+### Updating to this version
+
+Do this once if the app is already installed on the HPC. This version uses the same requirements
+as the preceding repository revision. Run `bash setup.sh` if the environment is missing or incomplete.
+
+1. Let any active interpretation finish, then stop the app with **Ctrl+C** in its terminal.
+2. **On the HPC**, in that terminal:
+
+```bash
+cd /data/epic20/APGCE/$USER/exploration-copilot
+```
+
+```bash
+git remote get-url origin
+git status --short
+```
+
+   The remote should be `https://github.com/AtifAsrul/exploration-copilot.git` (or its SSH equivalent).
+   If it points elsewhere, confirm you are in the intended checkout before changing anything.
+   If `git status --short` lists local code edits, preserve them with `git stash push -u -m before-v4-update`.
+   Ignored environments, models and workspaces remain in place. Then pull:
+
+```bash
+git pull --ff-only origin main
+git log -1 --oneline
+```
+
+   If Git reports divergent history, stop and review the local commits. Do not reset or overwrite them.
+   A saved stash can be reviewed later with `git stash show -p`; reapply it only after reviewing compatibility.
+
+3. **Check that Gemma can read the app's pictures** (about one minute, sends only made-up test pictures):
+
+```bash
+.venv/bin/python scripts/gemma_probe.py
+```
+
+   Every line should say `[OK]`. If some say `[--]`, the app still works: it will rely on its own choices
+   for those parts and say so. Send me what it printed.
+4. Start the app as usual with `bash start.sh` (add your `COPILOT_WORKSPACE=...` in front if you used one).
+5. In the page click **Import data**, check that both folders are right (seismic, and wells), click
+   **Use these folders**, then **Re-run interpretation**. The converted volumes are kept, so this is much
+   faster than the first run.
+
+**Quicker repair, without a GPU job.** If you only want the new parts on top of the run you already have
+(same horizons from RGT-Est, now flat at the survey edge), stop the app with Ctrl+C and type this instead of
+step 5, then start the app again:
+
+```bash
+.venv/bin/python -u -m copilot.pipeline --force --stages wells,horizons,faults,calibrate,leads,knowledge,ai,dossier
+```
+
+Put the same `COPILOT_WORKSPACE=...` in front if you used one. A full re-run is still better once, because it
+also gives RGT-Est the repaired edge traces.
 
 ### Watching progress and debugging
 
@@ -205,7 +271,7 @@ For a run that completed RGT but crashed during facies grouping:
 ```bash
 cd /data/epic20/APGCE/$USER/exploration-copilot
 git pull --ff-only origin main
-COPILOT_WORKSPACE="$PWD/workspace-openvds" .venv/bin/python -u -m copilot.pipeline --stages sfm,horizons,faults,leads,knowledge
+COPILOT_WORKSPACE="$PWD/workspace-openvds" .venv/bin/python -u -m copilot.pipeline --stages sfm,horizons,faults,calibrate,leads,knowledge,ai,dossier
 ```
 
 This preserves converted volumes, the interpretation grid, and `rgt.npy`. Foundation-model
@@ -222,12 +288,21 @@ rebuild a previously saved grid with additional inversion products.
 
 ## Part D — First run (once — do this well before the judging)
 
-1. Click **Import data** (top right). The challenge folder is already filled in. Click **Use this folder**.
-2. Click **Run interpretation**. A progress bar shows the steps. The first step (converting the nine
+1. Click **Import data** (top right). Two folders are already filled in: line 1 is the seismic, line 2 is
+   the well data (logs, deviation surveys, checkshots, well list). Under line 2 the app says how many well
+   files it found. Click **Use these folders**.
+2. Click **Run interpretation**. A progress bar shows twelve steps. The first step (converting the nine
    volumes) is the slowest. You can browse the seismic as soon as the first volume is ready.
 3. Before you click Run, close any Jupyter notebook that uses the **GPU via SLURM** kernel. Each team gets
    one GPU job at a time, and the app needs it.
-4. When the bar says **Finished**, everything is saved. From now on the app opens ready to use.
+4. When the step **Briefing** is done the app is ready to use and tells you so. The last two steps are the
+   assistant's own pass over the pictures (**Assistant's own interpretation**, **Final evidence**). They take
+   up to about 30 minutes on the shared model and stop by themselves after that. You can use the app meanwhile.
+5. When the bar says **Finished**, everything is saved. From now on the app opens ready to use.
+
+Two smaller buttons redo only part of the work, without touching the seismic steps:
+**Wells tab → Read the wells again**, and **How it works tab → Run the assistant's pass again** (answers it
+already gave are reused, so this is quick).
 
 ---
 
@@ -238,31 +313,60 @@ rebuild a previously saved grid with additional inversion products.
 * **Inline / Crossline** tabs switch the section. **Time slice / Horizon map** tabs switch the map.
 * Click anywhere to move the crosshair; both pictures follow.
 * Scroll the mouse wheel to step through lines (or through time on the map). Arrow keys work too.
-* **Ctrl + scroll** zooms, drag moves, double-click resets.
-* **Volume** picks which volume is shown (full, near, far, impedance, sand probability…).
-* The round buttons switch layers on and off: Horizons, Faults, Facies, Wells, Leads.
+* The **+ − ⤢** buttons at the bottom right of each picture zoom in, zoom out and show everything.
+  **Ctrl + scroll** zooms too; drag moves a zoomed picture.
+* **Volume** picks which volume is shown (full, near, far, impedance, sand probability…). **Coherence** is
+  in the same list: dark lines are places where neighbouring traces differ, which is how faults and channel
+  edges show up, best seen on a time slice.
+* The round buttons switch layers on and off:
+  * **Horizons · RGT**: solid lines H1, H2 … from RGT-Est.
+  * **Horizons · Gemma**: dashed lines G1, G2 …, the second opinion picked on a net of lines.
+  * **Fault sticks**: red sticks on sections and red fault lines on maps, named F1, F2 …
+  * **Fault likelihood**, **Facies**, **Wells**, **Leads**.
+* The lower-left panel has three tabs: **Time slice**, **Horizon map**, **Well logs**. On the horizon map,
+  choose a G horizon and "difference from the RGT horizon" to see where the two interpretations disagree.
+  In **Well logs**, pick a well: shale volume, resistivity, porosity, impedance, and a rock column (yellow
+  sand, red hydrocarbon flag), against time or depth, with the horizons drawn across. Click in the logs to
+  move the crosshair to that depth.
 * **Find look-alikes** highlights places whose seismic resembles the crosshair spot.
 * **Explain this spot** sends the assistant a picture of what you are looking at.
 
 **Right side — the assistant**
 
-* **Assistant** tab: ask in plain words. Blue tags like `E7` are facts — hover to read, click to jump there.
+* **Assistant** tab: ask in plain words. Tags like `E7` are facts — hover to read, click to jump there.
+  Blue = measured from the seismic, green = from the wells, purple = the assistant's own reading of a picture.
   Yellow tags jump to a location. Under each answer: **Show the facts used** and **Challenge this**.
+  The grey lines above an answer show what it did first: where you are, what it looked up, what it looked at.
 * **Leads** tab: the ranked traps with their scores. **Show on map**, **Explain**, **Argue both sides**.
-* **How it works** tab: which methods ran, the well checks, and the limits of the result.
+* **Wells** tab: every well, which files it has, whether its time-depth is its own checkshot or borrowed,
+  how much sand and hydrocarbon flag its logs show. **Show logs**, **Go to well**, **Explain**.
+* **How it works** tab: which methods ran, the two horizon interpretations compared, the named faults, the
+  facies names, the rock-certainty table, the well checks, and the limits of the result.
 
 ---
 
-## Part F — A 5-minute demo for the judges
+## Part F — A 10-minute demo for the judges
 
-1. Scroll through a few inlines, switch to crossline, show the crosshair and a time slice. Switch the volume to
-   sand probability. Turn Faults on.
-2. Open **Leads**. Click **Show on map** on the first lead.
-3. Click **Explain**. While it answers, point out the grey lines showing what it looked at.
-4. Click a blue fact tag: the viewer jumps to the evidence.
-5. Click **Challenge this**: the assistant argues against its own answer and gives a verdict.
-6. Put the crosshair somewhere interesting and click **Explain this spot**, then **Find look-alikes**.
-7. Ask: *Where would you drill next, and what could prove you wrong?*
+The judges give 10 minutes including the demo. This order shows every part once.
+
+1. **See the data (1 min).** Scroll through a few inlines, switch to crossline, click to move the crosshair,
+   zoom with the + button. Switch **Volume** to Coherence and step through time slices: the dark lines are
+   faults.
+2. **Two interpreters (2 min).** Turn on **Horizons · Gemma** next to **Horizons · RGT**. Say: "solid lines
+   are RGT-Est, dashed lines are reflectors Gemma chose and the app tracked on a net of lines". Open
+   **Horizon map**, choose a G horizon, then "difference from the RGT horizon": white is agreement.
+3. **Faults (1 min).** Point at a red fault stick, then ask: *Tell me about fault F1.* The answer gives its
+   strike, throw and what Gemma saw on the sticks.
+4. **Wells tied to seismic (2 min).** Open the **Wells** tab, click **Show logs** on a well. Show the sand
+   column and the horizons crossing the logs. Open **How it works** and show the rock-certainty table: "when
+   the prediction was this high, the wells showed sand this often".
+5. **A lead, with all evidence tied together (2 min).** Open **Leads**, click **Show on map**, then
+   **Explain**. Point out the three tag colours and click one of each. Click **Challenge this**.
+6. **Look for yourself (1 min).** Put the crosshair somewhere interesting, tick **Show the assistant my
+   section and time slice**, and click **Explain this spot**.
+7. **Close (1 min).** Ask: *Where would you drill next, and what could prove you wrong?*
+
+If the shared model is slow on the day, steps 2, 4 and the tables in **How it works** need no model at all.
 
 ---
 

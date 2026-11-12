@@ -9,9 +9,12 @@ Steps (each one saves its result, so a re-run only redoes what is missing):
   rgt      Relative Geologic Time with RGT-Est            (GPU through Slurm if possible)
   sfm      foundation-model features -> seismic facies    (GPU through Slurm if possible)
   horizons key horizons as iso-RGT surfaces
-  faults   fault likelihood
+  faults   coherence and fault likelihood
+  calibrate  well ties, log zones, rock certainty checked against the wells
   leads    maps, traps, ranked leads, evidence
-  knowledge  the briefing the chat assistant reads
+  knowledge  the briefing the chat assistant reads      (the app is usable from here on)
+  ai       the assistant's own pass: it looks at pictures and reviews horizons, faults, slices, wells, facies
+  dossier  merges that pass into the evidence
 """
 import argparse
 import math
@@ -29,10 +32,14 @@ from . import config, store
 from .config import read_json, set_status, write_json
 
 I = config.INTERP
-STAGES = ["convert", "wells", "grid", "rgt", "sfm", "horizons", "faults", "leads", "knowledge"]
+STAGES = ["convert", "wells", "grid", "rgt", "sfm", "horizons", "faults", "calibrate", "leads", "knowledge",
+          "ai", "dossier"]
 STAGE_LABEL = {"convert": "Convert volumes", "wells": "Read wells", "grid": "Prepare grid",
                "rgt": "Relative geologic time (RGT-Est)", "sfm": "Foundation model facies",
-               "horizons": "Horizons", "faults": "Faults", "leads": "Traps and leads", "knowledge": "Briefing"}
+               "horizons": "Horizons", "faults": "Faults", "calibrate": "Well ties and rock certainty",
+               "leads": "Traps and leads", "knowledge": "Briefing", "ai": "Assistant's own interpretation",
+               "dossier": "Final evidence"}
+SOFT = {"calibrate", "ai", "dossier"}       # a failure in these never stops the run; the limit is reported instead
 PROJECT = config.WORKSPACE / "project.json"
 
 
@@ -63,7 +70,7 @@ def stage_convert(force=False):
 def stage_wells(force=False):
     from . import wells
     proj = read_json(PROJECT, {})
-    d = proj.get("data_dir")
+    d = proj.get("wells_dir") or proj.get("data_dir")
     if not d or not Path(d).exists():
         log("No well folder given - continuing without wells")
         write_json(wells.WELLS_JSON, {"wells": [], "notes": ["no well data folder"]})
@@ -96,10 +103,11 @@ def stage_grid(force=False):
         grid["u_xl"] = [sgx * a["xx"] / math.hypot(a["xx"], a["yx"]), sgx * a["yx"] / math.hypot(a["xx"], a["yx"])]
     log(f"Interpretation grid: {len(ii)} x {len(xi)} x {len(ti)} (every {si} inline, {sx} crossline, {st} sample)")
     np.save(I / "seis.npy", ref.decimated(ii, xi, ti, log))
+    (I / "live.npy").unlink(missing_ok=True)
     roles = {}
     for v in store.list_volumes():
         role = v.meta["role"]
-        if v.name == ref.name or role in roles or role == "other":
+        if v.name == ref.name or role in roles or role == "other" or v.meta.get("derived"):
             continue
         # match by inline / crossline number and time, so differently-cropped volumes still line up
         vi = np.abs(v.ilines[None, :] - ref.ilines[ii][:, None]).argmin(1)
@@ -119,12 +127,27 @@ def load_grid():
     return g
 
 
+def get_live():
+    """(inline, crossline) mask of traces that hold real data on the interpretation grid."""
+    p = I / "live.npy"
+    if p.exists():
+        return np.load(p)
+    from . import rgt
+    live = rgt.live_mask(np.load(I / "seis.npy", mmap_mode="r"))
+    np.save(p, live)
+    if not live.all():
+        log(f"{100 * (1 - live.mean()):.1f}% of the survey area has no traces (empty edge): it is left out of the "
+            f"analysis and horizons are carried flat across it")
+    return live
+
+
 def stage_rgt(force=False, allow_classical=True):
     """RGT-Est if its weights and PyTorch are available; classical estimate otherwise."""
     from . import rgt
     if (I / "rgt.npy").exists() and not force:
         return
-    seis = np.load(I / "seis.npy")
+    live = get_live()
+    seis = rgt.fill_dead(np.load(I / "seis.npy"), live)      # empty traces borrow their nearest neighbour
     method = None
     if config.RGT_WEIGHTS.exists():
         try:
@@ -143,7 +166,7 @@ def stage_rgt(force=False, allow_classical=True):
     if method is None:
         out = rgt.rgt_classical(seis, log=log)
         method = "classical dip-steered RGT (RGT-Est was not available)"
-    np.save(I / "rgt.npy", out.astype(np.float32))
+    np.save(I / "rgt.npy", rgt.fill_dead(out, live).astype(np.float32))
     write_json(I / "rgt.json", {"method": method})
     log(f"RGT ready: {method}")
 
@@ -162,8 +185,13 @@ def stage_horizons(force=False):
     from . import rgt
     if (I / "horizons.npz").exists() and not force:
         return
-    seis, r = np.load(I / "seis.npy"), np.load(I / "rgt.npy")
+    live = get_live()
+    # empty traces take their nearest live neighbour, so every surface carries on flat across an empty edge
+    seis = rgt.fill_dead(np.load(I / "seis.npy"), live)
+    r = rgt.fill_dead(np.load(I / "rgt.npy"), live)
     hz, _, _ = rgt.pick_key_horizons(seis, r, log=log)
+    for h in hz:
+        h["z"] = rgt.fill_dead(h["z"], live)
     np.savez_compressed(I / "horizons.npz", names=np.array([h["name"] for h in hz]),
                         z=np.stack([h["z"] for h in hz]).astype(np.float32),
                         rgt=np.array([h["rgt"] for h in hz]), polarity=np.array([h["polarity"] for h in hz]),
@@ -171,8 +199,9 @@ def stage_horizons(force=False):
     log(f"{len(hz)} key horizons picked")
 
 
-def load_horizons():
-    p = I / "horizons.npz"
+def load_horizons(source="rgt"):
+    """source 'rgt' = surfaces from the RGT cube; 'gemma' = the assistant's tracked picks (same layout)."""
+    p = I / ("horizons_gemma.npz" if source == "gemma" else "horizons.npz")
     if not p.exists():
         return []
     d = np.load(p)
@@ -184,9 +213,16 @@ def stage_faults(force=False):
     from . import faults
     if (I / "faults.npy").exists() and not force:
         return
-    fl, semb = faults.fault_likelihood(np.load(I / "seis.npy"), log=log)
+    from . import rgt
+    live = get_live()
+    fl, semb = faults.fault_likelihood(rgt.fill_dead(np.load(I / "seis.npy"), live), log=log, live=live)
     np.save(I / "faults.npy", (fl * 255).astype(np.uint8))
     np.save(I / "semb.npy", (semb * 255).astype(np.uint8))
+    try:        # show the coherence cube in the viewer's Volume list (black = neighbouring traces differ)
+        store.register_derived("Coherence", "Coherence (black = break)", "coh", semb, load_grid(), cmap="gray",
+                               lo=float(np.percentile(semb[::4, ::4, ::4], 2)), hi=1.0)
+    except Exception as e:
+        log(f"(the coherence cube could not be added to the viewer: {e})")
 
 
 def stage_leads(force=False):
@@ -200,21 +236,43 @@ def stage_leads(force=False):
     fl = np.load(I / "faults.npy").astype(np.float32) / 255.0
     semb = np.load(I / "semb.npy").astype(np.float32) / 255.0
     fac = np.load(I / "facies.npy") if (I / "facies.npy").exists() else None
-    parts, maps, lead_map = attributes.build(g, seis, vols, load_horizons(), fl, semb, fac, wells.wells_summary(), log=log)
+    parts, maps, lead_map = attributes.build(g, seis, vols, load_horizons(), fl, semb, fac, wells.wells_summary(), log=log,
+                                             live=get_live(), calib=read_json(I / "calib.json"))
     np.savez_compressed(I / "maps.npz", **maps)
     np.save(I / "lead_map.npy", lead_map)
     write_json(I / "interp.json", parts)
     log(f"{len(parts['leads'])} leads ranked")
 
 
+def stage_calibrate(force=False):
+    from . import calibrate
+    if (I / "calib.json").exists() and not force:
+        return
+    calibrate.run(log=log)
+
+
 def stage_knowledge(force=False):
     from . import knowledge
     knowledge.build()
-    log("Briefing for the assistant is ready")
+    log("Briefing for the assistant is ready - the app can be used from now on")
+
+
+def stage_ai(force=False):
+    from . import ai_pass
+    if (I / "ai_done.json").exists() and not force:
+        return
+    ai_pass.run(log=log)
+
+
+def stage_dossier(force=False):
+    from . import knowledge
+    knowledge.build()
+    log("Evidence file updated with the assistant's own interpretation")
 
 
 FUNCS = {"convert": stage_convert, "wells": stage_wells, "grid": stage_grid, "rgt": stage_rgt, "sfm": stage_sfm,
-         "horizons": stage_horizons, "faults": stage_faults, "leads": stage_leads, "knowledge": stage_knowledge}
+         "horizons": stage_horizons, "faults": stage_faults, "calibrate": stage_calibrate, "leads": stage_leads,
+         "knowledge": stage_knowledge, "ai": stage_ai, "dossier": stage_dossier}
 
 
 # ------------------------------------------------------------------ GPU through Slurm
@@ -300,8 +358,9 @@ def run_gpu_stages(force=False, use_slurm=True, want=("rgt", "sfm")):
 
 def _classical_rgt():
     from . import rgt
-    out = rgt.rgt_classical(np.load(I / "seis.npy"), log=log)
-    np.save(I / "rgt.npy", out.astype(np.float32))
+    live = get_live()
+    out = rgt.rgt_classical(rgt.fill_dead(np.load(I / "seis.npy"), live), log=log)
+    np.save(I / "rgt.npy", rgt.fill_dead(out, live).astype(np.float32))
     write_json(I / "rgt.json", {"method": "classical dip-steered RGT (RGT-Est could not run)"})
 
 
@@ -370,7 +429,9 @@ def run(stages=None, force=False, use_slurm=True, in_job=False, strict=False):
     print(f"[runtime] Process-local thread limits: BLAS=1, OpenMP={cpu_threads()}", flush=True)
     if not in_job:
         set_status(stage=stages[0], message="Starting", state="running", error=None, log=[],
-                   stages=[{"id": s, "label": STAGE_LABEL[s]} for s in STAGES], started=time.time())
+                   stages=[{"id": s, "label": STAGE_LABEL[s]} for s in stages], started=time.time())
+        write_json(config.WORKSPACE / "soft_fail.json", [q for q in (read_json(config.WORKSPACE / "soft_fail.json", []) or [])
+                                                         if q.get("stage") not in stages])
     failed = False
     try:
         k = 0
@@ -393,6 +454,16 @@ def run(stages=None, force=False, use_slurm=True, in_job=False, strict=False):
                     k += 1
                     want.append(stages[k])
                 run_gpu_stages(force, use_slurm, want)
+            elif s in SOFT:
+                set_status(stage=s, message=STAGE_LABEL[s])
+                try:
+                    FUNCS[s](force)
+                except Exception as e:      # optional step: report it and carry on with what we have
+                    traceback.print_exc()
+                    log(f"!! {STAGE_LABEL[s]} did not finish ({type(e).__name__}: {str(e)[:200]}) - continuing without it")
+                    sf = read_json(config.WORKSPACE / "soft_fail.json", []) or []
+                    write_json(config.WORKSPACE / "soft_fail.json",
+                               sf + [{"stage": s, "label": STAGE_LABEL[s], "error": f"{type(e).__name__}: {str(e)[:200]}"}])
             else:
                 set_status(stage=s, message=STAGE_LABEL[s])
                 FUNCS[s](force)
@@ -410,7 +481,7 @@ def run(stages=None, force=False, use_slurm=True, in_job=False, strict=False):
         sys.exit(1)
 
 
-def set_project(data_dir=None, sources=None):
+def set_project(data_dir=None, sources=None, wells_dir=None):
     proj = read_json(PROJECT, {})
     if data_dir:
         proj["data_dir"] = str(data_dir)
@@ -418,6 +489,8 @@ def set_project(data_dir=None, sources=None):
             sources = [str(p) for p in find_segy(data_dir)]
     if sources:
         proj["sources"] = [str(s) for s in sources]
+    if wells_dir is not None:
+        proj["wells_dir"] = str(wells_dir) if wells_dir else None
     write_json(PROJECT, proj)
     return proj
 
@@ -430,19 +503,22 @@ def reset_interpretation():
         else:
             p.unlink(missing_ok=True)
     (config.WORKSPACE / "knowledge.json").unlink(missing_ok=True)
+    (config.WORKSPACE / "soft_fail.json").unlink(missing_ok=True)
+    store.remove_derived()
 
 
 def main():
     ap = argparse.ArgumentParser(description="Exploration Copilot interpretation pipeline")
     ap.add_argument("--data", help="folder holding the SEG-Y volumes and the well data")
+    ap.add_argument("--wells", help="folder holding the well data, if it is not inside --data")
     ap.add_argument("--stages", help="comma-separated subset of: " + ",".join(STAGES))
     ap.add_argument("--force", action="store_true", help="redo steps even if their results exist")
     ap.add_argument("--no-slurm", action="store_true", help="never submit a GPU job, run everything here")
     ap.add_argument("--in-job", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--strict", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()
-    if a.data:
-        set_project(a.data)
+    if a.data or a.wells:
+        set_project(a.data, wells_dir=a.wells)
     stages = [s.strip() for s in a.stages.split(",")] if a.stages else None
     if a.force and not a.stages and not a.in_job:
         reset_interpretation()

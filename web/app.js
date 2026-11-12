@@ -4,8 +4,9 @@ const $ = (id) => document.getElementById(id);
 const S = {
   vols: [], vol: null, ref: null, il: null, xl: null, twt: null, axis: "i", mapMode: "slice",
   horizon: null, attr: "time", cmaps: {}, gain: 1,
-  layers: { horizons: true, faults: false, facies: false, wells: true, leads: true, similar: false },
-  interp: { ready: false }, wells: [], evidence: {}, chat: [], busy: false, hlines: [], outlines: [],
+  layers: { horizons: true, ghorizons: false, sticks: true, faults: false, facies: false, wells: true, leads: true, similar: false },
+  interp: { ready: false }, wells: [], evidence: {}, chat: [], busy: false, hlines: [], outlines: [], sticks: [], ftraces: [],
+  well: null, wellData: null, logAxis: "time",
   hzTime: null, project: {}, status: {}, secData: null, mapData: null,
 };
 const seq = { sec: 0, map: 0 };
@@ -96,8 +97,9 @@ class Panel {
       if (down && !(moved && this.zoomed()) && e.target === canvas && this.img && this.onPick) { const [x, y] = this.mouse(e); if (this.inside(x, y)) this.onPick(this.H(x), this.V(y)); }
       down = null;
     });
-    canvas.addEventListener("dblclick", () => { if (this.ext) { this.view = this.full(); this.draw(); } });
+    canvas.addEventListener("dblclick", () => this.fit());
   }
+  fit() { if (this.ext) { this.view = this.full(); this.draw(); } }
   mouse(e) { const r = this.cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
   pw() { return Math.max(10, this.w - this.m.l - this.m.r); } ph() { return Math.max(10, this.h - this.m.t - this.m.b); }
   full() { return { h0: this.ext.h[0], h1: this.ext.h[1], v0: this.ext.v[0], v1: this.ext.v[1] }; }
@@ -156,7 +158,7 @@ function range(v) {
   if (s.bipolar) { const c = Math.max(Math.abs(s.lo), Math.abs(s.hi)) / S.gain; return [-c, c]; }
   const mid = (s.lo + s.hi) / 2, half = (s.hi - s.lo) / 2 / S.gain; return [mid - half, mid + half];
 }
-const cmapFor = (v) => S.cmaps[v.name] || (v.stats.bipolar ? "gray" : "viridis");
+const cmapFor = (v) => S.cmaps[v.name] || v.cmap || (v.stats.bipolar ? "gray" : "viridis");
 
 // ------------------------------------------------------------------ section
 async function updateSection() {
@@ -175,8 +177,12 @@ async function updateSection() {
       for (const layer of ["facies", "faults", "similar"]) if (S.layers[layer]) {
         try { const o = await fetchBin(`/api/overlay?layer=${layer}&axis=${S.axis}&number=${num}`); ov.push({ img: overlayCanvas(layer, o.buf, o.shape), ext: o.ext, smooth: layer !== "facies" }); } catch (e) {}
       }
-      S.hlines = S.layers.horizons ? await getJSON(`/api/hlines?axis=${S.axis}&number=${num}`).catch(() => []) : [];
-    } else S.hlines = [];
+      let hl = [];
+      if (S.layers.horizons) hl = hl.concat(await getJSON(`/api/hlines?axis=${S.axis}&number=${num}&source=rgt`).catch(() => []));
+      if (S.layers.ghorizons) hl = hl.concat(await getJSON(`/api/hlines?axis=${S.axis}&number=${num}&source=gemma`).catch(() => []));
+      S.hlines = hl;
+      S.sticks = S.layers.sticks && S.interp.has_sticks ? await getJSON(`/api/sticks?axis=${S.axis}&number=${num}`).catch(() => []) : [];
+    } else { S.hlines = []; S.sticks = []; }
     if (tok !== seq.sec) return;
     sec.overlays = ov; sec.setImage(colorize(r.buf, r.shape, LUT[cmapFor(v)]), ext, true);
     $("empty-section").textContent = "";
@@ -186,9 +192,26 @@ sec.onDraw = (c, p) => {
   // horizons
   c.lineWidth = 1.6; c.font = "bold 11px Segoe UI, sans-serif"; c.textBaseline = "bottom"; c.textAlign = "left";
   for (const h of S.hlines) {
-    c.strokeStyle = h.color; c.beginPath();
-    h.pos.forEach((q, k) => { const x = p.X(q), y = p.Y(h.twt[k]); k ? c.lineTo(x, y) : c.moveTo(x, y); }); c.stroke();
-    c.fillStyle = h.color; c.fillText(h.name, p.m.l + 4, Math.max(p.m.t + 12, p.Y(h.twt[Math.max(0, nearestIdx(h.pos, p.view.h0))]) - 2));
+    // RGT horizons are solid, the assistant's are dashed; both are drawn faint where there are no traces
+    const g = h.source === "gemma"; c.strokeStyle = h.color; c.lineWidth = g ? 1.5 : 1.7; c.setLineDash(g ? [7, 4] : []);
+    let k0 = 0;
+    const ok = (k) => !h.live || (h.live[k] && h.live[Math.max(0, k - 1)]);
+    for (let k = 1; k <= h.pos.length; k++) {
+      if (k === h.pos.length || ok(k) !== ok(k0 + 1)) {
+        c.globalAlpha = ok(k0 + 1) ? 1 : 0.3; c.beginPath();
+        for (let j = k0; j < k; j++) { const x = p.X(h.pos[j]), y = p.Y(h.twt[j]); j === k0 ? c.moveTo(x, y) : c.lineTo(x, y); }
+        c.stroke(); k0 = k - 1;
+      }
+    }
+    c.globalAlpha = 1; c.setLineDash([]); c.fillStyle = h.color;
+    if (g) { c.textAlign = "right"; c.fillText(h.name, p.w - p.m.r - 4, Math.max(p.m.t + 12, p.Y(h.twt[nearestIdx(h.pos, p.view.h1)]) - 2)); c.textAlign = "left"; }
+    else c.fillText(h.name, p.m.l + 4, Math.max(p.m.t + 12, p.Y(h.twt[Math.max(0, nearestIdx(h.pos, p.view.h0))]) - 2));
+  }
+  // fault sticks
+  if (S.layers.sticks) for (const s of S.sticks) {
+    c.strokeStyle = "#ff4d4d"; c.lineWidth = 2.6; c.beginPath();
+    s.pts.forEach((q, k) => { const x = p.X(q[0]), y = p.Y(q[1]); k ? c.lineTo(x, y) : c.moveTo(x, y); }); c.stroke();
+    if (s.fault) { c.fillStyle = "#ff8a8a"; c.fillText(s.fault, p.X(s.pts[0][0]) + 5, Math.max(p.m.t + 12, p.Y(s.pts[0][1]) + 12)); }
   }
   // wells close to this section
   if (S.layers.wells) {
@@ -219,22 +242,26 @@ sec.onHover = (h, t) => {
 
 // ------------------------------------------------------------------ map
 async function updateMap() {
+  if (S.mapMode === "logs") { logs.draw(); return; }
   const v = vol(); const tok = ++seq.map;
   if (!v || S.il == null) { map.clear(); return; }
   map.hlabel = "crossline →"; map.vlabel = "inline";
   try {
     const ov = [];
     if (S.mapMode === "horizon" && S.interp.ready && S.horizon) {
+      syncAttrs();
       const r = await fetchBin(`/api/map?horizon=${S.horizon}&attr=${S.attr}`, Float32Array);
+      S.ftraces = S.layers.sticks && S.interp.has_sticks ? await getJSON(`/api/fault_traces?horizon=${S.horizon}`).catch(() => []) : [];
       if (S.attr === "time") S.hzTime = r; else S.hzTime = await fetchBin(`/api/map?horizon=${S.horizon}&attr=time`, Float32Array).catch(() => null);
       S.outlines = S.layers.leads ? await getJSON(`/api/outlines?horizon=${S.horizon}`).catch(() => []) : [];
       if (tok !== seq.map) return;
       const [h, w] = r.shape, [lo, hi] = r.range, fc = (S.interp.facies_colors || []).map(hexRgb);
-      const lut = S.attr === "time" ? LUT.terrain : LUT.viridis; const step = (hi - lo) / 14 || 1;
+      const lut = S.attr === "time" ? LUT.terrain : S.attr === "diff" ? LUT.seismic : LUT.viridis; const step = (hi - lo) / 14 || 1;
       const img = toCanvas(w, h, (d) => {
         for (let i = 0; i < h; i++) for (let j = 0; j < w; j++) {
           const k = i * w + j, val = r.buf[k]; let c;
-          if (S.attr === "facies") c = fc[Math.round(val) % Math.max(1, fc.length)] || [90, 90, 90];
+          if (val !== val) c = [22, 27, 32];                      // no data here (empty survey edge)
+          else if (S.attr === "facies") c = fc[Math.round(val) % Math.max(1, fc.length)] || [90, 90, 90];
           else { const q = Math.max(0, Math.min(255, Math.round((val - lo) / (hi - lo || 1) * 255))) * 3; c = [lut[q], lut[q + 1], lut[q + 2]]; }
           let dim = 1;
           if (S.attr === "time" && j + 1 < w && i + 1 < h) { const b = Math.floor(val / step); if (b !== Math.floor(r.buf[k + 1] / step) || b !== Math.floor(r.buf[k + w] / step)) dim = 0.55; }
@@ -247,6 +274,7 @@ async function updateMap() {
     } else {
       const [lo, hi] = range(v);
       const r = await fetchBin(`/api/slice?vol=${encodeURIComponent(v.name)}&axis=t&idx=${nearestIdx(v.samples, S.twt)}&lo=${lo}&hi=${hi}`);
+      S.ftraces = S.interp.ready && S.layers.sticks && S.interp.has_sticks ? await getJSON(`/api/fault_traces?twt=${S.twt}`).catch(() => []) : [];
       if (tok !== seq.map) return;
       if (S.interp.ready) for (const layer of ["facies", "faults", "similar"]) if (S.layers[layer]) {
         try { const o = await fetchBin(`/api/overlay?layer=${layer}&axis=t&number=${S.twt}`); ov.push({ img: overlayCanvas(layer, o.buf, o.shape), ext: o.ext, smooth: layer !== "facies" }); } catch (e) {}
@@ -269,6 +297,11 @@ map.onDraw = (c, p) => {
     c.fillStyle = "#ffffff"; let sx = 0, sy = 0;
     for (let k = 0; k < o.il.length; k++) { const x = p.X(o.xl[k]), y = p.Y(o.il[k]); c.fillRect(x - 1, y - 1, 2, 2); sx += x; sy += y; }
     const cx = sx / o.il.length, cy = sy / o.il.length; c.fillStyle = "rgba(0,0,0,.65)"; c.fillRect(cx - 12, cy - 9, 26, 18); c.fillStyle = "#fff"; c.fillText(o.id, cx - 8, cy);
+  }
+  if (S.layers.sticks) for (const tr of S.ftraces) {            // named faults where they cut this slice / horizon
+    c.strokeStyle = "#ff4d4d"; c.lineWidth = 2.4; c.beginPath();
+    tr.il.forEach((il, k) => { const x = p.X(tr.xl[k]), y = p.Y(il); k ? c.lineTo(x, y) : c.moveTo(x, y); }); c.stroke();
+    const m = tr.il.length >> 1; c.fillStyle = "#ff8a8a"; c.fillText(tr.fault, p.X(tr.xl[m]) + 6, p.Y(tr.il[m]));
   }
   if (S.layers.wells) for (const w of S.wells) {
     if (w.il == null) continue; let q = [w.il, w.xl];
@@ -315,7 +348,8 @@ function setPos(p, opt = {}) {
   syncControls();
   const lineChanged = S.axis === "i" ? old.il !== S.il : old.xl !== S.xl;
   if (lineChanged || opt.force) updateSection(); else sec.draw();
-  if ((S.mapMode === "slice" && old.twt !== S.twt) || opt.force) updateMap(); else map.draw();
+  if (S.mapMode === "logs") logs.draw();
+  else if ((S.mapMode === "slice" && old.twt !== S.twt) || opt.force) updateMap(); else map.draw();
 }
 function syncControls() {
   const v = refVol(); if (!v) return;
@@ -333,13 +367,27 @@ $("line-slider").oninput = (e) => { const v = refVol(); const lines = S.axis ===
 $("time-slider").oninput = (e) => { const v = refVol(); setPos({ twt: v.samples[+e.target.value] }); };
 function setAxis(a) { S.axis = a; document.querySelectorAll("#tabs-axis button").forEach((b) => b.classList.toggle("on", b.dataset.axis === a)); sec.view = null; syncControls(); updateSection(); }
 document.querySelectorAll("#tabs-axis button").forEach((b) => (b.onclick = () => setAxis(b.dataset.axis)));
-function setMapMode(m) {
-  if (m === "horizon" && !S.interp.ready) { note("Horizon maps appear after you run the interpretation."); m = "slice"; }
+function applyMapMode(m) {
   S.mapMode = m; document.querySelectorAll("#tabs-map button").forEach((b) => b.classList.toggle("on", b.dataset.map === m));
   $("time-stepper").classList.toggle("hidden", m !== "slice"); $("time-slider").classList.toggle("hidden", m !== "slice"); $("hz-controls").classList.toggle("hidden", m !== "horizon");
-  updateMap();
+  $("log-controls").classList.toggle("hidden", m !== "logs"); $("cv-map").classList.toggle("hidden", m === "logs"); $("cv-logs").classList.toggle("hidden", m !== "logs");
+}
+function setMapMode(m) {
+  if (m === "horizon" && !S.interp.ready) { note("Horizon maps appear after you run the interpretation."); m = "slice"; }
+  if (m === "logs" && !logWells().length) { note("No well logs are loaded yet. Use “Import data” and choose the well data folder."); m = "slice"; }
+  applyMapMode(m);
+  if (m === "logs") { $("empty-map").textContent = ""; logs.resize(); showWell(S.well && logWells().some((w) => w.name === S.well) ? S.well : logWells()[0].name); }
+  else { map.resize(); updateMap(); }
 }
 document.querySelectorAll("#tabs-map button").forEach((b) => (b.onclick = () => setMapMode(b.dataset.map)));
+// the map attributes on offer depend on the horizon: the assistant's horizons have time, difference, confidence
+function syncAttrs() {
+  const by = (S.interp.map_attrs_by_hz || {})[S.horizon] || S.interp.map_attrs || [];
+  if (!by.includes(S.attr)) S.attr = "time";
+  const sel = $("sel-attr"); const want = by.join("|");
+  if (sel.dataset.have !== want) { sel.innerHTML = by.map((a) => `<option value="${a}">${esc((S.interp.map_labels || {})[a] || a)}</option>`).join(""); sel.dataset.have = want; }
+  sel.value = S.attr;
+}
 $("sel-hz").onchange = (e) => { S.horizon = e.target.value; updateMap(); };
 $("sel-attr").onchange = (e) => { S.attr = e.target.value; updateMap(); };
 $("sel-vol").onchange = (e) => { S.vol = e.target.value; $("sel-cmap").value = cmapFor(vol()); updateSection(); updateMap(); };
@@ -348,6 +396,8 @@ $("gain-up").onclick = () => { S.gain = Math.min(16, S.gain * 1.4); updateSectio
 $("gain-down").onclick = () => { S.gain = Math.max(0.1, S.gain / 1.4); updateSection(); updateMap(); };
 document.querySelectorAll("#layers .chip").forEach((b) => (b.onclick = () => {
   const l = b.dataset.layer; if (!S.interp.ready && l !== "wells") { note("This layer appears after you run the interpretation."); return; }
+  if (l === "ghorizons" && !(S.interp.horizons || []).some((h) => h.source === "gemma")) { note("The assistant's own horizons appear once its pass has finished (the last two steps of the run)."); return; }
+  if (l === "sticks" && !S.interp.has_sticks) { note("Fault sticks appear once the assistant's pass has finished (the last two steps of the run)."); return; }
   S.layers[l] = !S.layers[l]; b.classList.toggle("on", S.layers[l]); updateSection(); updateMap();
 }));
 window.addEventListener("keydown", (e) => {
@@ -355,7 +405,11 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "ArrowRight") stepLine(1); else if (e.key === "ArrowLeft") stepLine(-1); else if (e.key === "ArrowDown") stepTime(1); else if (e.key === "ArrowUp") stepTime(-1); else return;
   e.preventDefault();
 });
-window.addEventListener("resize", () => { sec.resize(); map.resize(); });
+window.addEventListener("resize", () => { sec.resize(); map.resize(); logs.resize(); });
+document.querySelectorAll(".zoomer").forEach((z) => z.querySelectorAll("button").forEach((b) => (b.onclick = () => {
+  const P = z.dataset.panel === "sec" ? sec : (S.mapMode === "logs" ? logs : map);
+  if (b.dataset.z === "fit") P.fit(); else if (P.view) P.zoom(b.dataset.z === "in" ? 1 / 1.5 : 1.5, P.m.l + P.pw() / 2, P.m.t + P.ph() / 2);
+})));
 
 // jump to a place: {il, xl, twt, horizon, vol(role), axis, volrole, layer, map:{horizon, attr}}
 function go(w) {
@@ -364,13 +418,14 @@ function go(w) {
   if (role) { const v = S.vols.find((q) => q.role === role || q.name === role); if (v) { S.vol = v.name; $("sel-vol").value = v.name; $("sel-cmap").value = cmapFor(v); } }
   if (w.axis && w.axis !== S.axis) { S.axis = w.axis; document.querySelectorAll("#tabs-axis button").forEach((b) => b.classList.toggle("on", b.dataset.axis === w.axis)); sec.view = null; }
   if (w.layer === "similar") { S.layers.similar = true; $("chip-similar").classList.remove("hidden"); $("chip-similar").classList.add("on"); }
+  if (w.well && logWells().some((q) => q.name === w.well)) { applyMapMode("logs"); logs.resize(); showWell(w.well); }
+  else if (w.mapmode === "slice" || (S.mapMode === "logs" && w.twt != null && !w.map)) applyMapMode("slice");
   const hz = (w.map && w.map.horizon) || w.horizon;
   if (hz && S.interp.ready && (S.interp.horizons || []).some((h) => h.name === hz)) {
     S.horizon = hz; $("sel-hz").value = hz;
     const want = (w.map && w.map.attr) || { sand: "sand_below", ai: "ai_below", vpvs: "vpvs_below", far: "far_over_near", near: "far_over_near" }[role];
     if (want && (S.interp.map_attrs || []).includes(want)) { S.attr = want; $("sel-attr").value = want; }
-    S.mapMode = "horizon"; document.querySelectorAll("#tabs-map button").forEach((b) => b.classList.toggle("on", b.dataset.map === "horizon"));
-    $("time-stepper").classList.add("hidden"); $("time-slider").classList.add("hidden"); $("hz-controls").classList.remove("hidden");
+    if (!w.well && w.mapmode !== "slice") applyMapMode("horizon");
   }
   setPos({ il: w.il, xl: w.xl, twt: w.twt }, { force: true });
 }
@@ -390,11 +445,10 @@ async function loadState(first) {
   pill("pill-llm", st.llm.ok ? "ok" : "bad", st.llm.ok ? "Assistant ready" : "Assistant offline"); $("pill-llm").title = `${st.llm.model} — ${st.llm.msg}`;
   if (S.interp.ready) {
     pill("pill-interp", "ok", "Interpreted " + (S.interp.built || ""));
-    $("sel-hz").innerHTML = S.interp.horizons.map((h) => `<option>${esc(h.name)}</option>`).join("");
+    $("sel-hz").innerHTML = S.interp.horizons.map((h) => `<option value="${esc(h.name)}">${esc(h.name)}${h.source === "gemma" ? " (Gemma)" : ""}</option>`).join("");
     if (!S.interp.horizons.find((h) => h.name === S.horizon)) S.horizon = (S.interp.horizons[0] || {}).name;
-    $("sel-hz").value = S.horizon;
-    $("sel-attr").innerHTML = S.interp.map_attrs.map((a) => `<option value="${a}">${esc((S.interp.map_labels || {})[a] || a)}</option>`).join("");
-    if (!S.interp.map_attrs.includes(S.attr)) S.attr = "time"; $("sel-attr").value = S.attr;
+    $("sel-hz").value = S.horizon; $("sel-attr").dataset.have = ""; syncAttrs();
+    if (!(S.interp.horizons || []).some((h) => h.source === "gemma")) { S.layers.ghorizons = false; document.querySelector('#layers [data-layer="ghorizons"]').classList.remove("on"); }
     const k = await getJSON("/api/knowledge"); S.evidence = {}; for (const e of k.evidence) S.evidence[e.id] = e; S.know = k;
   } else pill("pill-interp", "", "Not interpreted");
   $("btn-run").textContent = S.interp.ready ? "Re-run interpretation" : "Run interpretation";
@@ -402,8 +456,11 @@ async function loadState(first) {
   if (v && (S.il == null || !hadVols)) { S.il = v.ilines[v.ilines.length >> 1]; S.xl = v.xlines[v.xlines.length >> 1]; S.twt = v.samples[v.samples.length >> 1]; }
   const msg = !S.vols.length ? (S.status.state === "running" ? "Converting the volumes… pictures appear here as soon as the first one is ready." : "No data loaded yet.\nClick “Import data”, choose the folder with your SEG-Y files, then click “Run interpretation”.") : "";
   $("empty-section").textContent = msg; $("empty-map").textContent = msg;
-  syncControls(); renderLeads(); renderAbout(); renderSuggest();
-  sec.resize(); map.resize(); updateSection(); updateMap();
+  $("sel-well").innerHTML = logWells().map((w) => `<option>${esc(w.name)}</option>`).join("");
+  if (S.mapMode === "logs" && !logWells().length) applyMapMode("slice");
+  syncControls(); renderLeads(); renderWells(); renderAbout(); renderSuggest();
+  sec.resize(); map.resize(); logs.resize(); updateSection(); updateMap();
+  if (S.mapMode === "logs" && S.well) showWell(S.well);
   showProgress(S.status);
   if (S.status.state === "running") pollStatus();
   if (first && !S.chat.length) greet();
@@ -426,24 +483,47 @@ async function pollStatus() {
     let s; try { s = await getJSON("/api/status"); } catch (e) { continue; }
     showProgress(s);
     if (s.state !== "running") { polling = false; await loadState(); if (s.state === "done") addBot("The interpretation is finished. Ask me anything about it, or open the **Leads** tab.", true); return; }
-    if (s.stage !== lastStage) { lastStage = s.stage; const st = await getJSON("/api/state"); if (st.volumes.length !== nvol) { polling = false; nvol = st.volumes.length; await loadState(); return; } }
+    if (s.stage !== lastStage) {
+      lastStage = s.stage; const st = await getJSON("/api/state");
+      // new volumes are shown as they arrive, and the app becomes usable as soon as the briefing exists
+      if (st.volumes.length !== nvol || (st.interp && st.interp.ready && !S.interp.ready)) {
+        const first = st.interp && st.interp.ready && !S.interp.ready; polling = false; nvol = st.volumes.length; await loadState();
+        if (first) addBot("The measured interpretation is ready, so you can start asking questions now. I am still doing my own pass over the pictures (horizons, fault sticks, time slices); those results are added when it finishes.", true);
+        return;
+      }
+    }
   }
 }
 // import dialog
+async function scanWells() {
+  const p = $("imp-wells").value.trim(); if (!p) { $("imp-wells-found").textContent = "No well folder chosen: the run will continue without wells."; return; }
+  try { const s = await getJSON("/api/wells_scan?path=" + encodeURIComponent(p)); $("imp-wells-found").textContent = s.msg + (s.ok && s.wells.length ? " Wells: " + s.wells.slice(0, 16).join(", ") + (s.wells.length > 16 ? " …" : "") : ""); }
+  catch (e) { $("imp-wells-found").textContent = e.message; }
+}
 async function browse(path) {
   const b = await getJSON("/api/browse?path=" + encodeURIComponent(path || ""));
   $("imp-path").value = b.path;
+  if (!browse.wellsEdited) { $("imp-wells").value = b.wells_guess || b.path; scanWells(); }
   $("imp-list").innerHTML = `<div class="dir" data-p="${esc(b.parent)}">⬑ up one level</div>` + b.dirs.map((d) => `<div class="dir" data-p="${esc(b.path + "/" + d)}">📁 ${esc(d)}</div>`).join("") + b.files.map((f) => `<div class="file">${esc(f.name)} <span style="float:right">${f.mb} MB</span></div>`).join("");
   $("imp-found").textContent = b.segy_found ? `Found in this folder: ${b.segy_found} SEG-Y volume(s) and ${b.las_found} well log file(s).` : "No SEG-Y files in this folder yet - open the folder that contains them.";
   $("imp-use").disabled = !b.segy_found;
   document.querySelectorAll("#imp-list .dir").forEach((d) => (d.onclick = () => browse(d.dataset.p)));
 }
-$("btn-import").onclick = () => { $("modal").classList.remove("hidden"); browse(S.project.data_dir || S.defaultDir || ""); };
+$("btn-import").onclick = () => {
+  $("modal").classList.remove("hidden"); browse.wellsEdited = !!S.project.wells_dir; if (S.project.wells_dir) { $("imp-wells").value = S.project.wells_dir; scanWells(); }
+  $("imp-wells-only").classList.toggle("hidden", !S.vols.length); browse(S.project.data_dir || S.defaultDir || "");
+};
+$("imp-wells").oninput = () => { browse.wellsEdited = true; }; $("imp-wells-go").onclick = scanWells; $("imp-wells").onkeydown = (e) => { if (e.key === "Enter") scanWells(); };
+$("imp-wells-only").onclick = async () => {
+  try { await getJSON("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wells_only: true, wells_path: $("imp-wells").value.trim() }) });
+    S.project.wells_dir = $("imp-wells").value.trim(); $("modal").classList.add("hidden"); runStages(["wells", "calibrate", "leads", "knowledge", "dossier"]); }
+  catch (e) { $("imp-wells-found").textContent = e.message; }
+};
 $("imp-go").onclick = () => browse($("imp-path").value); $("imp-path").onkeydown = (e) => { if (e.key === "Enter") browse($("imp-path").value); };
 $("imp-cancel").onclick = () => $("modal").classList.add("hidden");
 $("imp-use").onclick = async () => {
-  try { const r = await getJSON("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: $("imp-path").value }) });
-    S.project.data_dir = r.data_dir; S.project.sources = r.segy; $("modal").classList.add("hidden"); note(`${r.segy.length} volumes selected. Now click “Run interpretation”.`); }
+  try { const r = await getJSON("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: $("imp-path").value, wells_path: $("imp-wells").value.trim() }) });
+    S.project.data_dir = r.data_dir; S.project.sources = r.segy; S.project.wells_dir = r.wells_dir; $("modal").classList.add("hidden"); note(`${r.segy.length} volumes selected${r.wells_dir ? " and the well folder set" : ""}. Now click “Run interpretation”.`); }
   catch (e) { $("imp-found").textContent = e.message; }
 };
 $("btn-run").onclick = async () => {
@@ -453,10 +533,16 @@ $("btn-run").onclick = async () => {
   catch (e) { note(e.message); }
 };
 
+// run only some steps again (the wells, or the assistant's own pass) without redoing the seismic steps
+async function runStages(stages) {
+  try { const r = await getJSON("/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stages }) }); if (!r.ok) { note(r.msg); return; } S.status = { state: "running" }; showProgress.keep = true; pollStatus(); showProgress(await getJSON("/api/status")); }
+  catch (e) { note(e.message); }
+}
+
 // ------------------------------------------------------------------ side panel: leads, about
 document.querySelectorAll("#tabs-side button").forEach((b) => (b.onclick = () => {
   document.querySelectorAll("#tabs-side button").forEach((q) => q.classList.toggle("on", q === b));
-  for (const s of ["chat", "leads", "about"]) $("side-" + s).classList.toggle("hidden", s !== b.dataset.side);
+  for (const s of ["chat", "leads", "wells", "about"]) $("side-" + s).classList.toggle("hidden", s !== b.dataset.side);
 }));
 function showSide(name) { document.querySelector(`#tabs-side button[data-side="${name}"]`).click(); }
 function renderLeads() {
@@ -474,24 +560,161 @@ function renderLeads() {
   box.querySelectorAll("[data-debate]").forEach((b) => (b.onclick = () => { showSide("chat"); ask(`Argue both sides for lead ${b.dataset.debate}: first the strongest case FOR drilling it, then the strongest case AGAINST, each with evidence, then give your verdict.`); }));
   bindChips(box);
 }
+function logWells() { return S.wells.filter((w) => w.has && w.has.logs); }
+function renderWells() {
+  const box = $("side-wells");
+  if (!S.wells.length) { box.innerHTML = `<div class="card"><h3>No wells loaded</h3><div class="sub">Click “Import data” and choose the folder with the well logs (.las), deviation surveys and checkshots.</div></div>`; return; }
+  const rc = S.interp.rock_certainty || {}; const ex = {}; for (const x of rc.wells_excluded || []) ex[x.well] = x.why;
+  box.innerHTML = `<div class="sub" style="color:var(--muted);font-size:12.5px">${S.wells.length} wells. Logs are measured in depth; checkshots turn depth into two-way time so they can be laid over the seismic. Click “Show logs” to see a well beside the section.</div>` +
+    S.wells.map((w) => {
+      const z = w.zones, td = w.td_source || "no time-depth";
+      const tdTag = td.startsWith("own") ? `<span class="tag ok">own checkshot</span>` : td.startsWith("checkshot borrowed") ? `<span class="tag warn" title="${esc(td)}">borrowed checkshot</span>` : `<span class="tag warn">no time-depth</span>`;
+      return `<div class="card"><h3>${esc(w.name)} ${w.has && w.has.logs ? `<span class="tag ok">logs</span>` : `<span class="tag warn">no logs</span>`} ${tdTag} ${w.inside_survey === false ? `<span class="tag warn">outside survey</span>` : ""}</h3>
+        <div class="sub">${w.il != null ? `IL ${Math.round(w.il)} / XL ${Math.round(w.xl)}` : "position unknown"}${w.curves && w.curves.length ? " · curves: " + esc(w.curves.filter((q) => !["sand", "hc", "vp"].includes(q)).join(", ")) : ""}</div>
+        ${z ? `<div class="kv"><span>Sand</span><span>${z.net_sand_m} m of ${z.gross_m} m logged (${Math.round((z.net_to_gross || 0) * 100)}%)</span><span>Hydrocarbon flag</span><span>${z.has_fluid_flag ? z.net_pay_m + " m" : "no resistivity or saturation curve"}</span></div>` : ""}
+        ${w.assistant_reading ? `<ul><li>${(w.evidence || []).slice(-1).map(evChip).join("")} Assistant’s reading: ${esc(w.assistant_reading.reading)} <i>(fluid: ${esc(w.assistant_reading.fluid)})</i></li></ul>` : ""}
+        ${ex[w.name] ? `<div class="sub" style="margin-top:6px">Left out of the rock-certainty check: ${esc(ex[w.name])}</div>` : ""}
+        <div class="row">${w.has && w.has.logs ? `<button class="small ghost" data-logs="${esc(w.name)}">Show logs</button>` : ""}${w.il != null ? `<button class="small ghost" data-gowell="${esc(w.name)}">Go to well</button>` : ""}${S.interp.ready ? `<button class="small ghost" data-askwell="${esc(w.name)}">Explain</button>` : ""}</div></div>`;
+    }).join("") + (S.vols.length ? `<div class="row"><button class="small ghost" id="btn-rewells" title="Read the well files again and redo the well ties and leads; the seismic steps are kept">Read the wells again</button></div>` : "");
+  box.querySelectorAll("[data-logs]").forEach((b) => (b.onclick = () => { applyMapMode("logs"); logs.resize(); showWell(b.dataset.logs); }));
+  box.querySelectorAll("[data-gowell]").forEach((b) => (b.onclick = () => { const w = S.wells.find((q) => q.name === b.dataset.gowell); go({ il: w.il, xl: w.xl }); }));
+  box.querySelectorAll("[data-askwell]").forEach((b) => (b.onclick = () => { showSide("chat"); ask(`Interpret well ${b.dataset.askwell}: what do its logs show, where is the best reservoir, is there any sign of hydrocarbons, and how does it tie to the seismic horizons?`); }));
+  if ($("btn-rewells")) $("btn-rewells").onclick = () => runStages(["wells", "calibrate", "leads", "knowledge", "dossier"]);
+  bindChips(box);
+}
 function renderAbout() {
   const box = $("side-about"); const k = S.know || {}, m = S.interp.methods || {};
-  const vols = S.vols.map((v) => `<li><b>${esc(v.label)}</b> — ${v.shape[0]} × ${v.shape[1]} × ${v.shape[2]}, converted with ${esc(v.converter || "?")}</li>`).join("");
+  const vols = S.vols.map((v) => `<li><b>${esc(v.label)}</b> — ${v.shape[0]} × ${v.shape[1]} × ${v.shape[2]}, ${v.derived ? "computed by the app" : "converted with " + esc(v.converter || "?")}</li>`).join("");
   box.innerHTML = `<div class="about">
     <h4>What this app does</h4><p>It converts your SEG-Y volumes to an AI-ready format, interprets them automatically, ties them to the wells, and lets you question the result. The assistant only states what the data supports, cites its evidence, offers an alternative explanation, and tells you how sure it is.</p>
     <h4>Volumes</h4><ul>${vols || "<li>none yet</li>"}</ul>
     ${S.interp.ready ? `<h4>How the interpretation was made</h4><ul>
       <li><b>Horizons:</b> ${esc(m.rgt || "")} → ${esc(m.horizons || "")}</li><li><b>Faults:</b> ${esc(m.faults || "")}</li>
       <li><b>Seismic facies:</b> ${esc(m.facies || "")}</li><li><b>Traps:</b> ${esc(m.traps || "")}</li>
-      <li><b>Assistant:</b> Gemma on this HPC, reading the evidence list and pictures of the data</li></ul>
-    <h4>Seismic facies</h4><ul>${(S.interp.facies || []).map((f) => `<li><span class="swatch" style="background:${S.interp.facies_colors[(f.facies - 1) % S.interp.facies_colors.length]}"></span>Facies ${f.facies}: ${esc(f.description)} (${Math.round(f.share * 100)}%)</li>`).join("")}</ul>
-    <h4>Well checks</h4><ul>${(k.calibration || []).map((c) => `<li>${esc(c.check)}: ${esc(c.verdict)}${c.correlation != null ? ` (r = ${c.correlation})` : ""}</li>`).join("") || "<li>none</li>"}</ul>
+      <li><b>Assistant:</b> Gemma on this HPC, reading the evidence list and pictures of the data</li>
+      ${m.assistant_pass ? `<li><b>Assistant’s own pass:</b> ${esc(m.assistant_pass)}</li>` : `<li><b>Assistant’s own pass:</b> not finished yet</li>`}</ul>
+    <div class="legend"><span>${evTag("", "measured from the data")}</span><span>${evTag("well", "from wells")}</span><span>${evTag("vis", "the assistant’s reading of a picture")}</span></div>
+    <h4>Two interpreters, compared</h4><ul>${(k.second_horizons || []).map((p) => `<li>${evChip(p.evidence)} <b>${esc(p.gemma)}</b> (${esc(p.label || "")}): ${p.same_reflector ? `same reflector as ${esc(p.rgt)}; typical difference ${p.median_abs_ms} ms, worst tenth ${p.p90_abs_ms} ms` : esc(p.note || "no RGT counterpart")}</li>`).join("") || "<li>The assistant’s own horizons are added when its pass has finished.</li>"}</ul>
+    <h4>Named faults</h4><ul>${(k.faults || []).map((fa) => `<li>${evChip(fa.evidence)} <b>${esc(fa.id)}</b>: ${fa.trend ? "strikes " + esc(fa.trend) + ", " : ""}${fa.length_km ? fa.length_km + " km, " : ""}${fa.twt_top_ms}–${fa.twt_base_ms} ms${fa.throw_ms ? ", throw about " + Math.round(fa.throw_ms) + " ms" : ""}; assistant confirmed ${fa.sticks_confirmed} of ${fa.sticks_reviewed} sticks</li>`).join("") || "<li>none named yet</li>"}</ul>
+    <h4>Seismic facies</h4><ul>${(S.interp.facies || []).map((f) => `<li><span class="swatch" style="background:${S.interp.facies_colors[(f.facies - 1) % S.interp.facies_colors.length]}"></span><b>Facies ${f.facies}: ${esc(f.name || f.description)}</b> (${Math.round(f.share * 100)}%)${f.no_data ? "" : ` — ${esc(f.lithology || "")}${f.well_net_sand != null ? `, wells show ${Math.round(f.well_net_sand * 100)}% sand` : ""}. <i>Usually: ${esc(f.reading || "")}.</i>${f.gemma_name ? ` Assistant, from pictures: ${esc(f.gemma_name)}${f.gemma_setting ? " — " + esc(f.gemma_setting) : ""}${f.gemma_agrees === false ? " (disagrees with the rule-based name)" : ""}.` : ""}`}</li>`).join("")}</ul>
+    <h4>Rock certainty, checked against the wells</h4>${rockTable(k.rock_certainty)}
+    <h4>Well checks</h4><ul>${(k.calibration || []).map((c) => `<li>${esc(c.check)}: ${esc(c.verdict)}${c.correlation != null ? ` (r = ${c.correlation})` : ""}</li>`).join("") || "<li>none</li>"}${k.polarity && k.polarity.reading ? `<li>Polarity: ${esc(k.polarity.reading)}</li>` : ""}</ul>
+    <div class="row" style="display:flex;gap:6px;margin:8px 0"><button class="small ghost" id="btn-reai" title="Ask the assistant to look at the pictures again; answers it already gave are reused">Run the assistant’s pass again</button></div>
     <h4>Limits to keep in mind</h4><ul>${(S.interp.data_quality || []).map((q) => `<li>${esc(q)}</li>`).join("") || "<li>none recorded</li>"}</ul>` : `<h4>Next step</h4><p>Import a data folder, then click “Run interpretation”.</p>`}
     <h4>Privacy</h4><p>The app runs only on this machine. Data never leaves the HPC: the only model it talks to is the Gemma instance hosted here.</p></div>`;
+  if ($("btn-reai")) $("btn-reai").onclick = () => runStages(["ai", "dossier"]);
+  bindChips(box);
 }
+function rockTable(rc) {
+  if (!rc) return "<p>Not available yet.</p>";
+  if (!rc.model || rc.model === "none") return `<p>${esc(rc.why || "Could not be checked.")}</p>`;
+  return `<p>${evChip(rc.evidence)} Tested on ${rc.intervals} log intervals in ${rc.wells_used.length} wells; each well was predicted from the others.</p>
+    <table><tr><th>When the prediction was</th><th>wells showed sand in</th><th>intervals</th></tr>${(rc.reliability || []).map((r) => `<tr><td>${r.lo.toFixed(1)}–${r.hi.toFixed(1)}</td><td>${Math.round(r.observed * 100)}%</td><td>${r.n}</td></tr>`).join("")}</table>`;
+}
+function evTag(cls, text) { return `<span class="ev ${cls}" style="cursor:default">E</span> ${text}`; }
+function evClass(id) { const s = (S.evidence[id] || {}).source; return s === "assistant-visual" ? "vis" : s === "well-log" || s === "well-check" ? "well" : ""; }
+function showWell(name) {
+  S.well = name; $("sel-well").value = name;
+  getJSON("/api/well?name=" + encodeURIComponent(name)).then((d) => { if (S.well !== name) return; S.wellData = d; if (!d.has_time && S.logAxis === "time") setLogAxis("depth", true); logs.setData(d); })
+    .catch((e) => note("The logs of " + name + " could not be loaded: " + e.message));
+}
+function setLogAxis(a, quiet) { S.logAxis = a; document.querySelectorAll("#tabs-logaxis button").forEach((b) => b.classList.toggle("on", b.dataset.la === a)); if (!quiet) logs.fit(); }
+$("sel-well").onchange = (e) => showWell(e.target.value);
+document.querySelectorAll("#tabs-logaxis button").forEach((b) => (b.onclick = () => {
+  if (b.dataset.la === "time" && S.wellData && !S.wellData.has_time) { note("This well has no time-depth relation, so its logs can only be shown in depth."); return; }
+  setLogAxis(b.dataset.la);
+}));
+
+// ------------------------------------------------------------------ well-log panel
+class LogPanel {
+  constructor(cv) {
+    this.cv = cv; this.ctx = cv.getContext("2d"); this.d = null; this.view = null; this.m = { l: 54, t: 46, r: 8, b: 10 }; this.tracks = [];
+    cv.addEventListener("wheel", (e) => {
+      e.preventDefault(); if (!this.d) return; const y = e.clientY - cv.getBoundingClientRect().top;
+      if (e.ctrlKey || e.metaKey) this.zoom(e.deltaY < 0 ? 1 / 1.25 : 1.25, 0, y); else this.shift((e.deltaY > 0 ? 1 : -1) * 0.1);
+    }, { passive: false });
+    cv.addEventListener("click", (e) => { const i = this.at(e); if (i == null) return; const L = this.d.logs; if (L.il && L.il[i] != null) setPos({ il: L.il[i], xl: L.xl[i], twt: L.twt ? L.twt[i] : undefined }, { force: true }); });
+    cv.addEventListener("mousemove", (e) => {
+      const i = this.at(e); if (i == null) return; const L = this.d.logs;
+      const bits = [`${this.d.name}`, `depth ${fmt(L.md[i], 5)} m`]; if (L.twt && L.twt[i] != null) bits.push(`TWT ${Math.round(L.twt[i])} ms`);
+      for (const t of this.tracks) if (L[t.key][i] != null) bits.push(`${t.short} ${fmt(L[t.key][i])}`);
+      $("readout").textContent = bits.join("   ");
+    });
+  }
+  ax() { return S.logAxis === "time" && this.d.has_time ? this.d.logs.twt : this.d.logs.md; }
+  pw() { return Math.max(10, this.w - this.m.l - this.m.r); } ph() { return Math.max(10, this.h - this.m.t - this.m.b); }
+  Y(v) { return this.m.t + (v - this.view.v0) / (this.view.v1 - this.view.v0) * this.ph(); }
+  V(y) { return this.view.v0 + (y - this.m.t) / this.ph() * (this.view.v1 - this.view.v0); }
+  full() { let lo = Infinity, hi = -Infinity; const a = this.ax(), L = this.d.logs; for (let i = 0; i < a.length; i++) { if (a[i] == null) continue; if (!this.tracks.some((t) => L[t.key][i] != null)) continue; if (a[i] < lo) lo = a[i]; if (a[i] > hi) hi = a[i]; } return isFinite(lo) ? [lo, hi] : [0, 1]; }
+  at(e) { if (!this.d || !this.view) return null; const r = this.cv.getBoundingClientRect(), y = e.clientY - r.top; if (y < this.m.t || y > this.h - this.m.b) return null; const v = this.V(y), a = this.ax(); let b = null, bd = Infinity; for (let i = 0; i < a.length; i++) { if (a[i] == null) continue; const d = Math.abs(a[i] - v); if (d < bd) { bd = d; b = i; } } return b; }
+  setData(d) {
+    this.d = d; const L = d.logs || {};
+    const defs = [["vsh", "Shale volume", "Vsh", "#7bd17b", false, [0, 1]], ["gr", "Gamma ray", "GR", "#7bd17b", false], ["rt", "Resistivity (log)", "RT", "#ff7b7b", true], ["phi", "Porosity", "PHI", "#7bb4ff", false], ["ai", "Impedance", "AI", "#e6c878", false]];
+    this.tracks = [];
+    for (const [key, label, short, color, log, fixed] of defs) {
+      if (!L[key] || (key === "gr" && L.vsh)) continue;
+      const vals = L[key].filter((q) => q != null && (!log || q > 0)).map((q) => (log ? Math.log10(q) : q)).sort((a, b) => a - b); if (vals.length < 5) continue;
+      const r = fixed || [vals[Math.floor(vals.length * 0.01)], vals[Math.floor(vals.length * 0.99)]];
+      this.tracks.push({ key, label, short, color, log, lo: r[0], hi: r[1] > r[0] ? r[1] : r[0] + 1 });
+    }
+    this.fit();
+  }
+  fit() { if (!this.d) return; const f = this.full(); this.view = { v0: f[0], v1: f[1] }; this.draw(); }
+  clamp() { const f = this.full(), v = this.view, span = Math.min(v.v1 - v.v0, f[1] - f[0]); if (v.v0 < f[0]) { v.v0 = f[0]; v.v1 = f[0] + span; } if (v.v1 > f[1]) { v.v1 = f[1]; v.v0 = f[1] - span; } }
+  zoom(k, x, y) { if (!this.view) return; const v = this.V(y); this.view = { v0: v - (v - this.view.v0) * k, v1: v + (this.view.v1 - v) * k }; this.clamp(); this.draw(); }
+  shift(fr) { if (!this.view) return; const s = (this.view.v1 - this.view.v0) * fr; this.view = { v0: this.view.v0 + s, v1: this.view.v1 + s }; this.clamp(); this.draw(); }
+  resize() { const r = this.cv.parentElement.getBoundingClientRect(), d = window.devicePixelRatio || 1; this.w = r.width; this.h = r.height; this.cv.width = Math.max(1, r.width * d); this.cv.height = Math.max(1, r.height * d); this.ctx.setTransform(d, 0, 0, d, 0, 0); this.draw(); }
+  // two-way time -> the value on the current depth axis (for horizon markers and the crosshair when showing depth)
+  conv(twt) { const L = this.d.logs; if (S.logAxis === "time" && this.d.has_time) return twt; if (!L.twt) return null; let b = null, bd = Infinity; for (let i = 0; i < L.twt.length; i++) { if (L.twt[i] == null) continue; const d = Math.abs(L.twt[i] - twt); if (d < bd) { bd = d; b = i; } } return b == null || bd > 30 ? null : L.md[b]; }
+  draw() {
+    const c = this.ctx; if (!this.w) return; c.clearRect(0, 0, this.w, this.h); if (!this.d || !this.view) return;
+    const L = this.d.logs, a = this.ax(), time = S.logAxis === "time" && this.d.has_time, n = this.tracks.length + 1, tw = this.pw() / n, T = this.m.t, B = this.h - this.m.b;
+    c.font = "12px Segoe UI, sans-serif"; c.textBaseline = "alphabetic"; c.textAlign = "left"; c.fillStyle = "#e6edf2";
+    const tie = this.d.tie; c.fillText(`${this.d.name} · ${this.d.td_source || "no time-depth"}${tie && tie.clear && tie.shift_ms ? ` · logs fit the seismic best moved ${tie.shift_ms > 0 ? "+" : ""}${tie.shift_ms} ms` : ""}`, this.m.l, 13);
+    // axis
+    c.fillStyle = "#8fa1af"; c.strokeStyle = "#2a3640"; c.font = "11px Segoe UI, sans-serif"; c.textAlign = "right"; c.textBaseline = "middle";
+    const span = this.view.v1 - this.view.v0, raw = span / Math.max(3, this.ph() / 60), p10 = Math.pow(10, Math.floor(Math.log10(raw))), st = [1, 2, 5, 10].map((q) => q * p10).find((q) => q >= raw) || raw;
+    for (let t = Math.ceil(this.view.v0 / st) * st; t <= this.view.v1; t += st) { const y = this.Y(t); c.fillText(Math.round(t), this.m.l - 5, y); c.beginPath(); c.moveTo(this.m.l, y); c.lineTo(this.w - this.m.r, y); c.stroke(); }
+    c.save(); c.translate(11, T + this.ph() / 2); c.rotate(-Math.PI / 2); c.textAlign = "center"; c.fillText(time ? "two-way time (ms)" : "measured depth (m)", 0, 0); c.restore();
+    c.save(); c.beginPath(); c.rect(this.m.l, T, this.pw(), this.ph()); c.clip();
+    this.tracks.forEach((t, k) => {
+      const x0 = this.m.l + k * tw; c.strokeStyle = t.color; c.lineWidth = 1; c.beginPath(); let pen = false;
+      for (let i = 0; i < a.length; i++) {
+        let v = L[t.key][i]; if (a[i] == null || v == null || (t.log && v <= 0)) { pen = false; continue; }
+        if (a[i] < this.view.v0 - span * 0.02 || a[i] > this.view.v1 + span * 0.02) { pen = false; continue; }
+        if (t.log) v = Math.log10(v); const x = x0 + 2 + Math.max(0, Math.min(1, (v - t.lo) / (t.hi - t.lo))) * (tw - 8), y = this.Y(a[i]);
+        pen ? c.lineTo(x, y) : c.moveTo(x, y); pen = true;
+      }
+      c.stroke();
+    });
+    // rock column: sand yellow, hydrocarbon flag red
+    const xr = this.m.l + this.tracks.length * tw; c.fillStyle = "#3d4a44"; c.fillRect(xr, T, tw - 4, this.ph());
+    for (const s of ((this.d.zones_detail || {}).sands || [])) {
+      const a0 = time ? s.top_twt : s.top_md, a1 = time ? s.base_twt : s.base_md; if (a0 == null || a1 == null) continue;
+      const y0 = this.Y(a0), y1 = Math.max(this.Y(a1), y0 + 1); if (y1 < T || y0 > B) continue;
+      c.fillStyle = s.pay ? "#e5484d" : "#f0cd28"; c.fillRect(xr + 1, y0, tw - 6, y1 - y0);
+      if (y1 - y0 > 11) { c.fillStyle = "#111"; c.textAlign = "left"; c.textBaseline = "middle"; c.fillText(s.id, xr + 4, (y0 + y1) / 2); }
+    }
+    // horizons and the crosshair time
+    c.textAlign = "left"; c.textBaseline = "bottom"; c.font = "bold 11px Segoe UI, sans-serif";
+    for (const mk of this.d.markers || []) { const v = this.conv(mk.twt); if (v == null) continue; const y = this.Y(v); c.strokeStyle = mk.color; c.lineWidth = 1.5; c.beginPath(); c.moveTo(this.m.l, y); c.lineTo(this.w - this.m.r, y); c.stroke(); c.fillStyle = mk.color; c.fillText(mk.name, this.m.l + 3, y - 1); }
+    const cv = S.twt != null ? this.conv(S.twt) : null;
+    if (cv != null) { const y = this.Y(cv); c.strokeStyle = "rgba(0,255,255,.85)"; c.lineWidth = 1; c.setLineDash([5, 4]); c.beginPath(); c.moveTo(this.m.l, y); c.lineTo(this.w - this.m.r, y); c.stroke(); c.setLineDash([]); }
+    c.restore();
+    // track frames and headings
+    c.font = "11px Segoe UI, sans-serif"; c.textAlign = "left"; c.textBaseline = "alphabetic";
+    const head = (x0, a, ca, b, cb) => { c.save(); c.beginPath(); c.rect(x0, 16, tw - 6, 28); c.clip(); c.fillStyle = ca; c.fillText(a, x0 + 2, 28); c.fillStyle = cb; c.fillText(b, x0 + 2, 41); c.restore(); };
+    this.tracks.forEach((t, k) => {
+      const x0 = this.m.l + k * tw; c.strokeStyle = "#2a3640"; c.strokeRect(x0, T, tw - 4, this.ph());
+      head(x0, t.label, t.color, `${fmt(t.log ? Math.pow(10, t.lo) : t.lo)} – ${fmt(t.log ? Math.pow(10, t.hi) : t.hi)}`, "#8fa1af");
+    });
+    c.strokeStyle = "#2a3640"; c.strokeRect(xr, T, tw - 4, this.ph()); head(xr, "Sand", "#f0cd28", "Hydrocarbon flag", "#e5484d");
+  }
+}
+const logs = new LogPanel($("cv-logs"));
 
 // ------------------------------------------------------------------ chat
-function evChip(id) { return `<span class="ev" data-ev="${id}">${id}</span>`; }
+function evChip(id) { return id ? `<span class="ev ${evClass(id)}" data-ev="${id}">${id}</span>` : ""; }
 function renderMd(text) {
   let t = esc(text);
   t = t.replace(/\[\[\s*IL\s*([\d.]+)\s*[,/]\s*XL\s*([\d.]+)(?:\s*[,/]\s*TWT\s*([\d.]+)(?:\s*ms)?)?(?:\s*,\s*vol\s*=\s*([\w-]+))?\s*\]\]/gi,
@@ -510,7 +733,7 @@ function renderMd(text) {
 function bindChips(root) {
   root.querySelectorAll(".ev").forEach((c) => {
     const e = S.evidence[c.dataset.ev];
-    c.onmouseenter = (ev) => { if (!e) return; const t = $("tip"); t.style.transform = ""; t.textContent = e.text; t.classList.remove("hidden"); const r = c.getBoundingClientRect(); t.style.left = Math.max(8, Math.min(window.innerWidth - 400, r.left - 150)) + "px"; t.style.top = (r.bottom + 6) + "px"; };
+    c.onmouseenter = (ev) => { if (!e) return; const t = $("tip"); t.style.transform = ""; t.textContent = e.text + ({ "assistant-visual": "  —  the assistant’s own reading of a picture", "well-log": "  —  from well logs", "well-check": "  —  seismic checked against wells", comparison: "  —  two interpretations compared" }[e.source] || ""); t.classList.remove("hidden"); const r = c.getBoundingClientRect(); t.style.left = Math.max(8, Math.min(window.innerWidth - 400, r.left - 150)) + "px"; t.style.top = (r.bottom + 6) + "px"; };
     c.onmouseleave = () => $("tip").classList.add("hidden");
     c.onclick = () => { if (e && e.where) go(e.where); else if (e) note("This fact is about the whole survey, not one place."); };
   });
@@ -558,12 +781,12 @@ async function ask(text, opt = {}) {
 $("chat-form").onsubmit = (e) => { e.preventDefault(); const t = $("chat-input").value; $("chat-input").value = ""; ask(t); };
 $("chat-input").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("chat-form").requestSubmit(); } };
 function renderSuggest() {
-  const q = S.interp.ready ? ["Give me the big picture of this survey", "Which lead is best, and why?", "What did the wells find?", "What are the biggest risks?", "Where would you drill next?", "Write a short interpretation report"] : [];
+  const q = S.interp.ready ? ["Give me the big picture of this survey", "Which lead is best, and why?", "What did the wells find?", "Do the two horizon interpretations agree?", "What do the time slices show?", "Where would you drill next?", "Write a short interpretation report"] : [];
   const box = $("suggest"); box.innerHTML = q.map((s) => `<button>${esc(s)}</button>`).join(""); box.classList.toggle("hidden", !q.length || S.chat.length > 0);
   box.querySelectorAll("button").forEach((b) => (b.onclick = () => ask(b.textContent)));
 }
 function greet() {
-  addBot(S.interp.ready ? "Hello. I have studied this survey: horizons, faults, seismic facies, wells and a ranked list of leads. Ask me anything — I will show the evidence behind every statement, and you can click any blue tag to see it in the viewer."
+  addBot(S.interp.ready ? "Hello. I have studied this survey: horizons, faults, seismic facies, wells and a ranked list of leads, and I have looked at the sections, time slices and logs myself. Ask me anything — I will show the evidence behind every statement. Blue tags are measurements, green are from wells, purple are my own readings of pictures; click any of them to see it in the viewer."
     : S.vols.length ? "Hello. The volumes are loaded and you can browse them on the left. Click **Run interpretation** so I can study the survey; after that I can answer questions with evidence."
     : "Hello. To begin: click **Import data**, choose the folder with your SEG-Y volumes and wells, then click **Run interpretation**.");
 }

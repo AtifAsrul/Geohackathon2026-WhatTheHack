@@ -35,8 +35,10 @@
       <label>Contrast <button class="mini" id="gain-down">−</button><button class="mini" id="gain-up">+</button></label>
       <span class="sep"></span>
       <span class="layers" id="layers">
-        <button data-layer="horizons" class="chip on">Horizons</button>
-        <button data-layer="faults" class="chip">Faults</button>
+        <button data-layer="horizons" class="chip on" title="Horizons from the RGT cube (solid lines, H1, H2 ...)">Horizons · RGT</button>
+        <button data-layer="ghorizons" class="chip" title="Second opinion: reflectors the assistant chose, tracked along a net of lines (dashed, G1, G2 ...)">Horizons · Gemma</button>
+        <button data-layer="sticks" class="chip on" title="Fault sticks picked on every 8th line and joined into named faults">Fault sticks</button>
+        <button data-layer="faults" class="chip" title="Where neighbouring traces stop looking alike">Fault likelihood</button>
         <button data-layer="facies" class="chip">Facies</button>
         <button data-layer="wells" class="chip on">Wells</button>
         <button data-layer="leads" class="chip on">Leads</button>
@@ -56,12 +58,13 @@
           </div>
           <input type="range" id="line-slider" class="slider">
         </div>
-        <div class="canvas-wrap"><canvas id="cv-section"></canvas><div class="empty" id="empty-section"></div></div>
+        <div class="canvas-wrap"><canvas id="cv-section"></canvas><div class="empty" id="empty-section"></div>
+          <div class="zoomer" data-panel="sec" title="Zoom. You can also hold Ctrl and scroll, then drag to move."><button data-z="in">+</button><button data-z="out">−</button><button data-z="fit" title="Show everything">⤢</button></div></div>
       </div>
       <div class="panel" id="p-map">
         <div class="phead">
           <div class="tabs" id="tabs-map">
-            <button data-map="slice" class="on">Time slice</button><button data-map="horizon">Horizon map</button>
+            <button data-map="slice" class="on">Time slice</button><button data-map="horizon">Horizon map</button><button data-map="logs">Well logs</button>
           </div>
           <div class="stepper" id="time-stepper">
             <button class="mini" id="time-prev">◀</button>
@@ -71,9 +74,14 @@
           <div class="stepper hidden" id="hz-controls">
             <select id="sel-hz"></select><select id="sel-attr"></select>
           </div>
+          <div class="stepper hidden" id="log-controls">
+            <select id="sel-well"></select>
+            <div class="tabs" id="tabs-logaxis"><button data-la="time" class="on">Time</button><button data-la="depth">Depth</button></div>
+          </div>
           <input type="range" id="time-slider" class="slider">
         </div>
-        <div class="canvas-wrap"><canvas id="cv-map"></canvas><div class="empty" id="empty-map"></div></div>
+        <div class="canvas-wrap"><canvas id="cv-map"></canvas><canvas id="cv-logs" class="hidden"></canvas><div class="empty" id="empty-map"></div>
+          <div class="zoomer" data-panel="map" title="Zoom. You can also hold Ctrl and scroll, then drag to move."><button data-z="in">+</button><button data-z="out">−</button><button data-z="fit" title="Show everything">⤢</button></div></div>
       </div>
     </div>
     <div class="readout">
@@ -87,6 +95,7 @@
     <div class="tabs big" id="tabs-side">
       <button data-side="chat" class="on">Assistant</button>
       <button data-side="leads">Leads</button>
+      <button data-side="wells">Wells</button>
       <button data-side="about">How it works</button>
     </div>
     <div class="side-body" id="side-chat">
@@ -95,12 +104,13 @@
       <form id="chat-form">
         <textarea id="chat-input" rows="2" placeholder="Ask about the geology, a lead, a well, or what you are looking at…"></textarea>
         <div class="chat-row">
-          <label class="check"><input type="checkbox" id="attach-view"> Show the assistant my current section</label>
+          <label class="check"><input type="checkbox" id="attach-view"> Show the assistant my section and time slice</label>
           <button class="primary" id="chat-send" type="submit">Ask</button>
         </div>
       </form>
     </div>
     <div class="side-body hidden" id="side-leads"></div>
+    <div class="side-body hidden" id="side-wells"></div>
     <div class="side-body hidden" id="side-about"></div>
   </section>
 </main>
@@ -108,13 +118,17 @@
 <div id="modal" class="hidden">
   <div class="dialog">
     <h2>Import data</h2>
-    <p>Choose the folder on this computer that holds the SEG-Y volumes and the well data. Everything inside it is picked up automatically.</p>
+    <p><b>1. Seismic.</b> Choose the folder on this computer that holds the SEG-Y volumes (.sgy). Folders inside it are searched too.</p>
     <div class="pathrow"><input id="imp-path" type="text" spellcheck="false"><button class="ghost" id="imp-go">Open</button></div>
     <div id="imp-list"></div>
     <div id="imp-found"></div>
+    <p style="margin-top:12px"><b>2. Wells.</b> The folder with the well logs (.las), deviation surveys, checkshots and the well list.</p>
+    <div class="pathrow"><input id="imp-wells" type="text" spellcheck="false"><button class="ghost" id="imp-wells-go">Check</button></div>
+    <div id="imp-wells-found"></div>
     <div class="dialog-actions">
       <button class="ghost" id="imp-cancel">Cancel</button>
-      <button class="primary" id="imp-use">Use this folder</button>
+      <button class="ghost hidden" id="imp-wells-only" title="Keep the seismic as it is and read the wells again from this folder">Update wells only</button>
+      <button class="primary" id="imp-use">Use these folders</button>
     </div>
   </div>
 </div>

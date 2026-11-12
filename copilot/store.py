@@ -29,7 +29,7 @@ _ROLES = [  # (regex on lower-case file name, role, human label)
     (r"vp[_\- ]?vs", "vpvs", "Vp/Vs"),
     (r"sand[_\- ]?prob|sandprob|prob", "sand", "Sand probability"),
 ]
-ROLE_ORDER = ["full", "near", "mid", "far", "ufar", "ai", "si", "vpvs", "sand", "other"]
+ROLE_ORDER = ["full", "near", "mid", "far", "ufar", "ai", "si", "vpvs", "sand", "coh", "other"]
 
 
 def guess_role(filename):
@@ -411,9 +411,46 @@ def by_role():
     return d
 
 
+def register_derived(name, label, role, cube, grid, cmap=None, lo=None, hi=None):
+    """Make a cube the app computed (e.g. coherence) selectable in the viewer like any loaded volume.
+
+    The cube lives on the interpretation grid; its line numbers and times come from `grid`.
+    """
+    d = config.STORES / f"{name}.npstore"
+    d.mkdir(parents=True, exist_ok=True)
+    np.save(d / "amplitude.npy", np.asarray(cube, dtype=np.float32))
+    ref = reference_volume()
+    meta = {"name": name, "label": label, "role": role, "source": "derived", "kind": "npy", "path": str(d),
+            "converter": "computed by the app", "shape": [int(v) for v in cube.shape],
+            "ilines": [int(v) for v in grid["ilines"]], "xlines": [int(v) for v in grid["xlines"]],
+            "samples": [float(v) for v in grid["times"]], "affine": ref.meta.get("affine") if ref else None,
+            "derived": True, "cmap": cmap}
+    st = Volume(meta).compute_stats()
+    if lo is not None:
+        st["lo"] = float(lo)
+    if hi is not None:
+        st["hi"] = float(hi)
+    st["bipolar"] = False
+    meta["stats"] = st
+    write_json(config.STORES / f"{name}.json", meta)
+    _vcache.pop(str(config.STORES / f"{name}.json"), None)
+    return meta
+
+
+def remove_derived():
+    """Forget every volume the app computed itself (used when the interpretation is started over)."""
+    import shutil
+    for p in config.STORES.glob("*.json"):
+        m = read_json(p) or {}
+        if m.get("derived"):
+            shutil.rmtree(m.get("path", ""), ignore_errors=True)
+            p.unlink(missing_ok=True)
+            _vcache.pop(str(p), None)
+
+
 def reference_volume():
     """The volume that defines the survey grid (full stack if present)."""
-    vols = list_volumes()
+    vols = [v for v in list_volumes() if not v.meta.get("derived")]
     if not vols:
         return None
     for role in ("full", "mid", "near", "far", "ufar"):

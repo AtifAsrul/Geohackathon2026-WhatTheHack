@@ -11,7 +11,7 @@ import os
 
 import numpy as np
 from scipy import fft as sfft
-from scipy.ndimage import gaussian_filter, median_filter
+from scipy.ndimage import binary_erosion, distance_transform_edt, gaussian_filter, median_filter
 
 
 def _norm01(a):
@@ -22,6 +22,44 @@ def _norm01(a):
 def z_score_clip(a, clip=3.0):
     z = (a - a.mean()) / (a.std() + 1e-8)
     return _norm01(np.clip(z, -clip, clip))
+
+
+# ------------------------------------------------------------------ empty traces at the survey edge
+def live_mask(seis, erode=2):
+    """True where a trace holds real data. Traces that are all zero (or nearly: tapered edge) are 'dead'.
+
+    The rim next to a dead area is also dropped (erode), because low-fold edge traces are unreliable.
+    """
+    ni = seis.shape[0]
+    rms = np.empty(seis.shape[:2], dtype=np.float32)
+    for b in range(0, ni, 32):
+        blk = np.nan_to_num(np.asarray(seis[b:b + 32], dtype=np.float32))
+        rms[b:b + 32] = np.sqrt(np.mean(blk * blk, axis=2))
+    pos = rms[rms > 0]
+    if pos.size == 0:
+        return np.ones(rms.shape, dtype=bool)
+    live = rms > 0.02 * float(np.median(pos))
+    if live.all() or not live.any():
+        return np.ones(rms.shape, dtype=bool) if not live.any() else live
+    if erode:
+        shrunk = binary_erosion(live, iterations=int(erode), border_value=1)
+        if shrunk.any():
+            live = shrunk
+    return live
+
+
+def fill_dead(a, live):
+    """Copy the nearest live trace (or map value) into every dead position. Works on cubes and on maps.
+
+    For a horizon map this is what makes the surface carry on flat, at constant time, into an empty area.
+    """
+    if live is None or live.all():
+        return a
+    idx = distance_transform_edt(~live, return_distances=False, return_indices=True)
+    dead = ~live
+    out = np.array(a, copy=True)
+    out[dead] = np.asarray(a)[idx[0][dead], idx[1][dead]]
+    return out
 
 
 # ------------------------------------------------------------------ RGT-Est

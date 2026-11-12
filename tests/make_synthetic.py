@@ -1,6 +1,10 @@
 """Make a small fake survey (seismic + inversion volumes + wells) to try the app without real data.
 
-    python tests/make_synthetic.py  OUTPUT_FOLDER
+    python tests/make_synthetic.py  OUTPUT_FOLDER  [--dead] [--wells 6]
+
+--dead   leaves an empty wedge and an empty strip at the survey edge (zero traces), like a cropped survey.
+--wells  3 (default) or 6 wells. With 6, one well has a checkshot that is 16 ms too slow, to test the well tie.
+The true model is saved next to the data as truth.npz so tests can compare against it.
 
 The folder mimics the hackathon layout: stack/, inversion/, well_data/{las,deviations,checkshots}.
 Geology: layered rocks folded into a dome, cut by one fault, with a sandy layer that is
@@ -19,7 +23,7 @@ def ricker(f=28.0, dt=0.004, n=41):
     return (1 - 2 * a) * np.exp(-a)
 
 
-def main(out):
+def main(out, dead=False, n_wells=3):
     out = Path(out)
     rng = np.random.default_rng(7)
     ni, nx, nt, dt = 120, 150, 320, 4.0
@@ -62,6 +66,7 @@ def main(out):
     ai = np.where(gas, ai - 700, ai).astype(np.float32)
     vpvs = (2.05 - 0.35 * sand - np.where(gas, 0.2, 0.0) + 0.02 * rng.standard_normal((ni, nx, nt))).astype(np.float32)
 
+    sand_true, ai_true = sand.copy(), ai.copy()
     refl = np.zeros_like(ai)
     refl[:, :, 1:] = (ai[:, :, 1:] - ai[:, :, :-1]) / (ai[:, :, 1:] + ai[:, :, :-1])
     w = ricker()
@@ -71,6 +76,12 @@ def main(out):
     near = (0.9 * full + 0.003 * rng.standard_normal(full.shape)).astype(np.float32)
     far = (full * boost + 0.005 * rng.standard_normal(full.shape)).astype(np.float32)
     si = (ai / vpvs).astype(np.float32)
+
+    dead_mask = np.zeros((ni, nx), dtype=bool)
+    if dead:
+        dead_mask = (I < 12 - 0.09 * X) | (I >= ni - 6)
+        for v in (full, near, far, ai, si, vpvs, sand):
+            v[dead_mask] = 0.0
 
     # coordinates: 25 m bins, rotated 20 degrees
     th = np.radians(20.0)
@@ -105,49 +116,79 @@ def main(out):
     write(out / "inversion" / f"{P}Inversion_VpVs_cropped.sgy", vpvs)
     write(out / "inversion" / f"{P}Inversion_TotalSandProbability_cropped.sgy", sand)
 
-    # ---- wells (constant velocity 2500 m/s: TWT ms = 0.8 * depth m)
+    # ---- wells (constant velocity 2500 m/s: TWT ms = 0.8 * depth below sea level in m)
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from copilot.wells import min_curvature
+
+    def ab(x, y):                                   # inverse of xy(): world -> fractional (inline idx, crossline idx)
+        dx, dy = (np.asarray(x) - 400000) / 25.0, (np.asarray(y) - 6200000) / 25.0
+        return dx * np.sin(th) + dy * np.cos(th), dx * np.cos(th) - dy * np.sin(th)
+
     wd = out / "well_data"
     for d in ("las", "deviations", "checkshots"):
         (wd / d).mkdir(parents=True, exist_ok=True)
-    wells = {"w-1": (55, 60, 0.0), "w-2": (30, 30, 400.0), "w-3": (95, 125, 0.0)}   # (inline idx, xline idx, lateral drift m)
+    # name: (inline idx, xline idx, lateral drift m, result, checkshot bias ms or None for no checkshot)
+    wells = {"w-1": (55, 60, 0.0, "Gas discovery", 0.0), "w-2": (30, 30, 400.0, "Water-wet sand", 0.0),
+             "w-3": (95, 125, 0.0, "Dry", None)}
+    if n_wells >= 6:
+        wells.update({"w-4": (70, 38, 0.0, "Water-wet sand", 0.0), "w-5": (60, 100, 0.0, "Dry", 16.0),
+                      "w-6": (100, 20, 0.0, "Dry", 0.0)})
     import openpyxl
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.append(["Well Name", "Surface X", "Surface Y", "KB (m)", "TD (m)", "Result"])
     kb = 25.0
-    for name, (a, b, drift) in wells.items():
+    truth_wells = {}
+    for name, (a, b, drift, result, bias) in wells.items():
         x0, y0 = xy(a, b)
-        ws.append([name, round(x0, 1), round(y0, 1), kb, 2900.0, {"w-1": "Gas discovery", "w-2": "Water-wet sand", "w-3": "Dry"}[name]])
+        ws.append([name, round(x0, 1), round(y0, 1), kb, 2900.0, result])
         md = np.arange(0, 2900.0, 25.0)
         if drift:
             inc = np.clip((md - 800) / 2100 * 14, 0, 14)
             azi = np.full_like(md, 60.0)
             lines = ["MD INCL AZIM"] + [f"{m:.2f} {i:.3f} {z:.2f}" for m, i, z in zip(md, inc, azi)]
+            dx, dy, dz = min_curvature(md, inc, azi)
+            px, py, ptv = x0 + dx, y0 + dy, dz - kb
         else:
             lines = ["MD X Y TVDSS"] + [f"{m:.2f} {x0:.2f} {y0:.2f} {m - kb:.2f}" for m in md]
+            px, py, ptv = np.full(len(md), x0), np.full(len(md), y0), md - kb
         (wd / "deviations" / f"{name}_Deviation.txt").write_text("\n".join(lines))
-        if name != "w-3":
+        if bias is not None:
             z = np.arange(0, 2900.0, 100.0)
             (wd / "checkshots" / f"{name}_Checkshot.txt").write_text(
-                "TVDSS TWT\n" + "\n".join(f"{d:.1f} {0.8 * d:.2f}" for d in z))
-        # logs sampled from the model along a vertical path at the surface position
+                "TVDSS TWT\n" + "\n".join(f"{d:.1f} {0.8 * d + (bias if d > 0 else 0):.2f}" for d in z))
+        # logs sampled from the model along the true well path
         depth = np.arange(1300.0, 2850.0, 0.5)
-        twt = 0.8 * (depth - kb)
+        tv = np.interp(depth, md, ptv)
+        fa, fb = ab(np.interp(depth, md, px), np.interp(depth, md, py))
+        ia = np.clip(np.rint(fa).astype(int), 0, ni - 1)
+        ib = np.clip(np.rint(fb).astype(int), 0, nx - 1)
+        twt = 0.8 * tv
         k = np.clip(((twt - t0) / dt).astype(int), 0, nt - 1)
-        s = sand[a, b, k]
-        g = gas[a, b, k]
+        s = sand_true[ia, ib, k]
+        g = gas[ia, ib, k]
         gr = 110 - 80 * s + 4 * rng.standard_normal(len(depth))
         rhob = 2.55 - 0.3 * s - 0.08 * g
-        dtc = 304800.0 / (ai[a, b, k] / rhob)
+        dtc = 304800.0 / (ai_true[ia, ib, k] / rhob)
         rt = 2 + 3 * s + 60 * g + 0.2 * rng.standard_normal(len(depth))
         las = ["~Version", " VERS. 2.0 :", " WRAP. NO :", "~Well", f" STRT.M {depth[0]:.2f} :", f" STOP.M {depth[-1]:.2f} :",
                " STEP.M 0.5 :", " NULL. -999.25 :", f" WELL. {name} :", "~Curve", " DEPT.M :", " GR.GAPI :", " RHOB.G/C3 :",
                " DT.US/F :", " RT.OHMM :", "~ASCII"]
         las += [f"{d:.2f} {a1:.3f} {a2:.4f} {a3:.3f} {a4:.3f}" for d, a1, a2, a3, a4 in zip(depth, gr, rhob, dtc, rt)]
         (wd / "las" / f"{name}.las").write_text("\n".join(las))
+        truth_wells[name] = bias
     wb.save(wd / "Challenge1_Challenge2_WellList_Information.xlsx")
+    np.savez_compressed(out / "truth.npz", dead=dead_mask, shift=shift.astype(np.float32), fault=fault,
+                        sand_top_ms=(t0 + dt * (sand_tau[0] - 60 + shift)).astype(np.float32), on_dome=on_dome,
+                        channel=channel, il=il, xl=xl, t0=t0, dt=dt,
+                        well_names=np.array(list(truth_wells)),
+                        well_bias_ms=np.array([np.nan if v is None else v for v in truth_wells.values()]))
     print("done ->", out)
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "synthetic_data")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    nw = int(sys.argv[sys.argv.index("--wells") + 1]) if "--wells" in sys.argv else 3
+    if "--wells" in sys.argv:
+        args = [a for a in args if a != str(nw)]
+    main(args[0] if args else "synthetic_data", dead="--dead" in sys.argv, n_wells=nw)

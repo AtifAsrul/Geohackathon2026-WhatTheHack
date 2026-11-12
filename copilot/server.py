@@ -62,14 +62,20 @@ def state():
         m = v.meta
         vols.append({"name": v.name, "label": m["label"], "role": m["role"], "shape": m["shape"],
                      "ilines": m["ilines"], "xlines": m["xlines"], "samples": m["samples"],
-                     "stats": m["stats"], "converter": m.get("converter"), "affine": m.get("affine")})
+                     "stats": m["stats"], "converter": m.get("converter"), "affine": m.get("affine"),
+                     "cmap": m.get("cmap"), "derived": bool(m.get("derived"))})
     ref = store.reference_volume()
     k = knowledge.load() if tools.ready() else None
     interp = {"ready": bool(k)}
     if k:
         h = tools.horizons()
+        hg = tools.horizons("gemma")
         interp.update({
-            "horizons": [{"name": n, "color": tools.HCOLORS[i % len(tools.HCOLORS)]} for i, n in enumerate(h["names"])] if h else [],
+            "horizons": ([{"name": n, "color": tools.HCOLORS[i % len(tools.HCOLORS)], "source": "rgt"} for i, n in enumerate(h["names"])] if h else [])
+                        + ([{"name": n, "color": tools.HCOLORS[i % len(tools.HCOLORS)], "source": "gemma"} for i, n in enumerate(hg["names"])] if hg else []),
+            "second_horizons": k.get("second_horizons", []), "faults": k.get("faults", []),
+            "rock_certainty": {q: (k.get("rock_certainty") or {}).get(q) for q in ("model", "intervals", "wells_used", "reliability", "why", "evidence", "wells_excluded")},
+            "assistant_pass": k.get("assistant_pass"), "has_sticks": bool(tools.sticks_file().get("sticks")),
             "leads": [{"id": l["id"], "kind": l["kind"], "horizon": l["horizon"], "where": l["where"],
                        "area_km2": l.get("area_km2"), "relief_ms": l["relief_ms"], "scores": l["scores"],
                        "rating": l["rating"], "tested": l["tested"], "wells_inside": l.get("wells_inside", []),
@@ -77,14 +83,17 @@ def state():
             "methods": k.get("methods"), "facies": k.get("facies"), "facies_colors": tools.FACIES_COLORS,
             "built": k.get("built"), "data_quality": k.get("data_quality", []),
             "map_attrs": sorted({key.split("__")[1] for key in (tools.maps() or {})}),
+            "map_attrs_by_hz": {hz: sorted(key.split("__")[1] for key in (tools.maps() or {}) if key.split("__")[0] == hz)
+                                for hz in {key.split("__")[0] for key in (tools.maps() or {})}},
             "map_labels": tools.MAP_LABEL,
         })
     ws = wells.wells_summary()
     ok, msg = llm.check()
     proj = read_json(pipeline.PROJECT, {})
     return _clean({"volumes": vols, "ref": ref.name if ref else None, "interp": interp,
-                   "wells": [{k2: w.get(k2) for k2 in ("name", "il", "xl", "path", "has", "curves", "td_source", "info", "inside_survey", "notes")}
-                             for w in ws.get("wells", [])],
+                   "wells": [dict({k2: w.get(k2) for k2 in ("name", "il", "xl", "path", "has", "curves", "td_source", "info", "inside_survey", "notes")},
+                                  **{k2: kw.get(k2) for k2 in ("zones", "assistant_reading", "evidence")})
+                             for w in ws.get("wells", []) for kw in [next((q for q in (k or {}).get("wells", []) if q["name"] == w["name"]), {})]],
                    "status": _status(), "llm": {"ok": ok, "msg": msg, "model": config.LLM_MODEL},
                    "project": proj, "default_data_dir": config.DEFAULT_DATA_DIR})
 
@@ -99,7 +108,10 @@ def get_knowledge():
     k = knowledge.load() or {}
     return _clean({"evidence": k.get("evidence", []), "briefing": k.get("briefing", ""), "leads": k.get("leads", []),
                    "horizons": k.get("horizons", []), "facies": k.get("facies", []), "calibration": k.get("calibration", []),
-                   "methods": k.get("methods", {}), "data_quality": k.get("data_quality", [])})
+                   "methods": k.get("methods", {}), "data_quality": k.get("data_quality", []),
+                   "rock_certainty": k.get("rock_certainty"), "polarity": k.get("polarity"), "faults": k.get("faults", []),
+                   "second_horizons": k.get("second_horizons", []), "slice_readings": k.get("slice_readings", []),
+                   "assistant_pass": k.get("assistant_pass")})
 
 
 # ------------------------------------------------------------------ data import + run
@@ -123,20 +135,42 @@ def browse(path: str = ""):
         pass
     segy = [str(q) for q in pipeline.find_segy(p)][:200] if p.exists() else []
     n_las = sum(1 for _ in p.rglob("*.las")) if p.exists() else 0
-    return {"path": str(p), "parent": str(p.parent), "dirs": dirs, "files": files, "segy_found": len(segy), "las_found": n_las}
+    guess = next((str(c) for c in (p / "well_data", p / "wells", p / "well") if c.is_dir()), str(p))
+    return {"path": str(p), "parent": str(p.parent), "dirs": dirs, "files": files, "segy_found": len(segy), "las_found": n_las,
+            "wells_guess": guess}
+
+
+@app.get("/api/wells_scan")
+def wells_scan(path: str = ""):
+    """What well files are in a folder (for the import dialog). Reads file names only."""
+    p = Path(path).expanduser()
+    if not path or not p.is_dir():
+        return {"path": path, "ok": False, "msg": "That folder does not exist on this machine."}
+    s = wells.scan(p)
+    s["ok"] = bool(s["las"] or s["deviation"] or s["checkshot"] or s["well_list"])
+    s["msg"] = (f"Found {s['las']} log files (LAS), {s['deviation']} deviation surveys, {s['checkshot']} checkshots and "
+                f"{s['well_list']} well list(s) for {len(s['wells'])} wells." if s["ok"] else "No well files found in that folder.")
+    return s
 
 
 @app.post("/api/import")
 async def do_import(req: Request):
     body = await req.json()
+    wp = (body.get("wells_path") or "").strip()
+    if wp and not Path(wp).is_dir():
+        raise HTTPException(400, "The well data folder does not exist on this machine.")
+    if body.get("wells_only"):                       # change the wells without touching the seismic selection
+        proj = pipeline.set_project(wells_dir=wp)
+        return {"ok": True, "segy": [Path(s).name for s in proj.get("sources", [])], "data_dir": proj.get("data_dir"),
+                "wells_dir": proj.get("wells_dir")}
     p = Path(body.get("path", ""))
     if not p.exists() or not p.is_dir():
         raise HTTPException(400, "That folder does not exist on this machine.")
     segy = pipeline.find_segy(p)
     if not segy:
         raise HTTPException(400, "No .sgy / .segy files were found in that folder (or the folders inside it).")
-    proj = pipeline.set_project(p, [str(s) for s in segy])
-    return {"ok": True, "segy": [Path(s).name for s in proj["sources"]], "data_dir": proj["data_dir"]}
+    proj = pipeline.set_project(p, [str(s) for s in segy], wells_dir=wp)
+    return {"ok": True, "segy": [Path(s).name for s in proj["sources"]], "data_dir": proj["data_dir"], "wells_dir": proj.get("wells_dir")}
 
 
 @app.post("/api/run")
@@ -148,12 +182,15 @@ async def run(req: Request):
     if not read_json(pipeline.PROJECT, {}).get("sources"):
         raise HTTPException(400, "Import a data folder first.")
     cmd = [sys.executable, "-u", "-m", "copilot.pipeline"]
-    if body.get("force"):
+    stages = [s for s in (body.get("stages") or []) if s in pipeline.STAGES]
+    if stages:                                       # a partial re-run, e.g. only the wells or only the assistant's pass
+        cmd += ["--stages", ",".join(stages), "--force"]
+    elif body.get("force"):
         cmd.append("--force")
     if body.get("no_slurm"):
         cmd.append("--no-slurm")
-    config.set_status(stage="convert", message="Starting", state="running", error=None, log=[],
-                      stages=[{"id": s, "label": pipeline.STAGE_LABEL[s]} for s in pipeline.STAGES], started=time.time())
+    config.set_status(stage=(stages or pipeline.STAGES)[0], message="Starting", state="running", error=None, log=[],
+                      stages=[{"id": s, "label": pipeline.STAGE_LABEL[s]} for s in (stages or pipeline.STAGES)], started=time.time())
     logf = open(config.LOGS / "pipeline.log", "w")
     _proc["p"] = subprocess.Popen(cmd, cwd=str(config.ROOT), stdout=logf, stderr=subprocess.STDOUT)
     return {"ok": True}
@@ -182,8 +219,8 @@ def get_slice(vol: str, axis: str, idx: int, lo: float = None, hi: float = None)
 
 
 @app.get("/api/hlines")
-def hlines(axis: str, number: float):
-    return tools.horizon_lines(axis, number) if tools.horizons() is not None else []
+def hlines(axis: str, number: float, source: str = "rgt"):
+    return tools.horizon_lines(axis, number, source) if tools.horizons(source) is not None else []
 
 
 @app.get("/api/overlay")
@@ -202,14 +239,33 @@ def get_map(horizon: str, attr: str = "time"):
     key = f"{horizon}__{attr}"
     if mp is None or key not in mp:
         raise HTTPException(404, "not available")
-    a = np.ascontiguousarray(mp[key], dtype=np.float32)
-    lo, hi = (float(v) for v in np.percentile(a, [2, 98]))
+    a = np.array(mp[key], dtype=np.float32)
+    lv = tools.live()
+    ok = a[lv] if lv is not None and lv.shape == a.shape else a[np.isfinite(a)]
+    lo, hi = (float(v) for v in np.percentile(ok, [2, 98])) if ok.size else (0.0, 1.0)
     if attr == "facies":
-        lo, hi = 0.0, float(a.max())
+        lo, hi = 0.0, float(np.nanmax(a))
+    if attr == "diff":                                    # difference maps are centred on zero
+        c = max(abs(lo), abs(hi), 1e-6)
+        lo, hi = -c, c
+    if lv is not None and lv.shape == a.shape and attr != "time":
+        a[~lv] = np.nan                                   # empty traces are shown dark, not as a value
     ext = {"h": [int(g["xlines"][0]), int(g["xlines"][-1])], "v": [int(g["ilines"][0]), int(g["ilines"][-1])]}
     return Response(a.tobytes(), media_type="application/octet-stream",
                     headers={"X-Shape": f"{a.shape[0]},{a.shape[1]}", "X-Range": f"{lo},{hi}", "X-Extent": json.dumps(ext),
                              "Cache-Control": "no-store"})
+
+
+@app.get("/api/sticks")
+def get_sticks(axis: str, number: float):
+    """Fault sticks to draw on one section (line numbers and ms)."""
+    return _clean(tools.sticks_on(axis, number))
+
+
+@app.get("/api/fault_traces")
+def get_fault_traces(twt: float = None, horizon: str = None):
+    """Where the named faults cut a time slice or a horizon map."""
+    return _clean(tools.fault_traces(twt=twt, horizon=horizon))
 
 
 @app.get("/api/outlines")
@@ -232,15 +288,34 @@ def well(name: str):
     d = tools.well(name)
     if "error" in d:
         raise HTTPException(404, d["error"])
-    a = wells.well_arrays(wells.norm(name))
+    key = wells.norm(name)
+    a = wells.well_arrays(key)
     logs = {}
-    if "twt" in a and np.isfinite(a["twt"]).any():
-        step = max(1, len(a["twt"]) // 1500)
-        logs["twt"] = a["twt"][::step]
-        for c in ("gr", "vsh", "rt", "phi", "hc", "sand"):
+    if "md" in a:
+        step = max(1, len(a["md"]) // 2500)
+
+        def col(v):
+            v = np.asarray(v, dtype=float)[::step]
+            return [None if not np.isfinite(q) else round(float(q), 4) for q in v]
+
+        logs["md"] = col(a["md"])
+        for c in ("twt", "tvdss", "il", "xl"):
+            if c in a:
+                logs[c] = col(a[c])
+        for c in ("gr", "vsh", "rt", "phi", "ai", "hc", "sand"):
             if f"c_{c}" in a:
-                logs[c] = np.where(np.isfinite(a[f"c_{c}"][::step]), a[f"c_{c}"][::step], None)
+                logs[c] = col(a[f"c_{c}"])
     d["logs"] = logs
+    d["has_time"] = bool("twt" in a and np.isfinite(a["twt"]).any())
+    d["zones_detail"] = wells.log_zones(key)
+    k = knowledge.load() or {}
+    d["tie"] = ((k.get("rock_certainty") or {}).get("shifts") or {}).get(d.get("name"))
+    marks = []
+    hn = (tools.horizons() or {}).get("names", [])
+    for hname, r in (d.get("horizons") or {}).items():
+        marks.append({"name": hname, "twt": r["twt"], "color": tools.HCOLORS[hn.index(hname) % len(tools.HCOLORS)] if hname in hn else "#ffffff"})
+    d["markers"] = marks
+    d["horizon_ties"] = [t for t in k.get("horizon_ties", []) if wells.norm(t["well"]) == key]
     return _clean(d)
 
 

@@ -57,6 +57,14 @@ def environment():
     from copilot import llm
     ok, msg = llm.check()
     line(ok, f"Gemma assistant at {config.LLM_URL}", msg)
+    pr = config.read_json(config.PROBE_FILE)
+    if pr and pr.get("images_ok"):
+        line(True, "Gemma reads the app's pictures",
+             f"marks {pr.get('mark_accuracy')}, lines {pr.get('line_accuracy')}, grid squares {pr.get('cell_accuracy_within_one')} right; "
+             f"{pr.get('seconds_image')} s per picture")
+    else:
+        line(False, "Gemma picture check", "not done yet - type:  .venv/bin/python scripts/gemma_probe.py" if not pr
+             else "the model did not answer a picture question; its own pass will use the app's choices")
     d = Path(config.DEFAULT_DATA_DIR)
     line(d.exists(), f"Challenge data folder {d}", "" if d.exists() else "not found")
 
@@ -81,9 +89,9 @@ def data_report(folder):
         low, kind = p.name.lower(), None
         if p.suffix.lower() == ".las":
             kind = "las"
-        elif "deviat" in low:
+        elif "deviat" in low or "deviat" in p.parent.name.lower():
             kind = "deviation"
-        elif "check" in low:
+        elif "check" in low or "check" in p.parent.name.lower():
             kind = "checkshot"
         elif p.suffix.lower() in (".xlsx", ".xlsm"):
             kind = "well list"

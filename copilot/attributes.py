@@ -8,6 +8,7 @@ import heapq
 import numpy as np
 from scipy.ndimage import binary_dilation, gaussian_filter, label
 
+from . import calibrate
 from . import faults as faults_mod
 from . import wells as wells_mod
 
@@ -42,11 +43,12 @@ class Windowed:
         return (np.sqrt(np.maximum(m, 0)) if self.power == 2 else m).astype(np.float32)
 
 
-def priority_flood(z, wall=None):
+def priority_flood(z, wall=None, outside=None):
     """Fill 'pits' of the surface z (here: structural highs, because z is time, small = shallow).
 
     Returns the spill level for every cell. filled - z > 0 marks a closure.
-    Cells in `wall` (sealing faults) cannot be crossed.
+    Cells in `wall` (sealing faults) cannot be crossed. Cells in `outside` (no data) behave like the
+    survey border: anything that reaches them has spilled, so nothing can close against an empty area.
     """
     ni, nx = z.shape
     BIG = 1e12
@@ -62,6 +64,12 @@ def priority_flood(z, wall=None):
                 done[i, x] = True
                 filled[i, x] = zz[i, x]
                 heap.append((zz[i, x], i, x))
+    if outside is not None and outside.any():
+        for i, x in np.argwhere(outside):
+            if not done[i, x]:
+                done[i, x] = True
+                filled[i, x] = z[i, x]
+                heap.append((float(z[i, x]), int(i), int(x)))
     heapq.heapify(heap)
     nbrs = ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1))
     push, pop = heapq.heappush, heapq.heappop
@@ -88,11 +96,13 @@ def priority_flood(z, wall=None):
     return filled
 
 
-def closures_on(z_ms, wall, min_relief, min_cells):
-    f = priority_flood(z_ms, wall)
+def closures_on(z_ms, wall, min_relief, min_cells, outside=None):
+    f = priority_flood(z_ms, wall, outside)
     depth = f - z_ms
     if wall is not None:
         depth[wall] = 0
+    if outside is not None:
+        depth[outside] = 0
     lab, n = label(depth > min_relief, structure=np.ones((3, 3)))
     out = []
     for c in range(1, n + 1):
@@ -107,13 +117,15 @@ def closures_on(z_ms, wall, min_relief, min_cells):
     return out, depth
 
 
-def _zscore_in(prop, mask):
+def _zscore_in(prop, mask, live=None):
+    """How far the mean inside `mask` is from the survey mean, in standard deviations (live traces only)."""
     if prop is None:
         return None
-    sd = float(prop.std())
+    ref = prop[live] if live is not None else prop
+    sd = float(ref.std())
     if sd < 1e-12:
         return 0.0
-    return float((prop[mask].mean() - prop.mean()) / sd)
+    return float((prop[mask].mean() - ref.mean()) / sd)
 
 
 def _ring(mask, width):
@@ -125,9 +137,17 @@ def _lvl(score):
 
 
 # ------------------------------------------------------------------ main builder
-def build(grid, seis, vols, horizons, fl, semb, facies, wells, log=print, window_ms=40.0):
-    """Returns (knowledge parts dict, maps dict of 2-D arrays, lead_map int16 (nh, ni, nx))."""
+def build(grid, seis, vols, horizons, fl, semb, facies, wells, log=print, window_ms=40.0, live=None, calib=None):
+    """Returns (knowledge parts dict, maps dict of 2-D arrays, lead_map int16 (nh, ni, nx)).
+
+    live  : (inline, crossline) mask of traces with real data; empty traces are left out of every statistic
+            and can never be part of a trap.
+    calib : result of calibrate.fit (rock certainty checked against the wells), or None.
+    """
     ni, nx, nt = seis.shape
+    if live is None:
+        live = np.ones((ni, nx), dtype=bool)
+    dead = ~live
     dt = grid["dt_ms"]
     t0 = grid["times"][0]
     w = max(3, int(round(window_ms / dt)))
@@ -219,9 +239,10 @@ def build(grid, seis, vols, horizons, fl, semb, facies, wells, log=print, window
         # traps: with and without sealing faults
         min_relief = max(2.0 * dt, 4.0)
         min_cells = max(30, int(0.25 / cell_km2)) if cell_km2 else 60
-        four_way, depth4 = closures_on(z_ms, None, min_relief, min_cells)
+        out_ = dead if dead.any() else None
+        four_way, depth4 = closures_on(z_ms, None, min_relief, min_cells, out_)
         wall = binary_dilation(fmap > 0.35, iterations=1)
-        fault_cl, depthf = (closures_on(z_ms, wall, min_relief, min_cells) if wall.any() else ([], depth4))
+        fault_cl, depthf = (closures_on(z_ms, wall, min_relief, min_cells, out_) if wall.any() else ([], depth4))
         m["closure"] = np.maximum(depth4, depthf).astype(np.float32)
         cands = [dict(c, kind="four-way dip closure") for c in four_way]
         mask4 = np.zeros((ni, nx), dtype=bool)
@@ -234,14 +255,14 @@ def build(grid, seis, vols, horizons, fl, semb, facies, wells, log=print, window
         # stratigraphic candidates: sand-rich (or bright) bodies that structure does not explain
         prop_name = "sand_below" if "sand_below" in m else "rms_below"
         prop = gaussian_filter(m[prop_name], 1.5)
-        thr = 0.5 * float(np.median(prop) + np.percentile(prop, 98))      # halfway between background and the best
+        thr = 0.5 * float(np.median(prop[live]) + np.percentile(prop[live], 98))   # halfway between background and the best
         if prop_name == "sand_below":
             thr = max(thr, 0.4)
         struct_mask = np.zeros((ni, nx), dtype=bool)
         for c in cands:
             struct_mask |= c["mask"]
         # only the part of a body that lies OUTSIDE the structural closures counts here
-        outside = (prop > thr) & ~(binary_dilation(struct_mask, iterations=2) if struct_mask.any() else struct_mask)
+        outside = (prop > thr) & live & ~(binary_dilation(struct_mask, iterations=2) if struct_mask.any() else struct_mask)
         lab, n = label(outside, structure=np.ones((3, 3)))
         for c in range(1, n + 1):
             bm = lab == c
@@ -250,7 +271,7 @@ def build(grid, seis, vols, horizons, fl, semb, facies, wells, log=print, window
                 continue
             zi = np.where(bm, z_ms, np.inf)
             ci, cx = np.unravel_index(np.argmin(zi), z_ms.shape)
-            ring = _ring(bm, 3)
+            ring = _ring(bm, 3) & live
             shallow_edge = ring & (z_ms < np.percentile(z_ms[bm], 15))
             pinch = bool(shallow_edge.sum() >= 5 and prop[shallow_edge].mean() < 0.75 * prop[bm].mean())
             cands.append({"mask": bm, "cells": cells, "relief_ms": float(z_ms[bm].max() - z_ms[bm].min()),
@@ -280,14 +301,14 @@ def build(grid, seis, vols, horizons, fl, semb, facies, wells, log=print, window
         # ---- score every candidate
         for c in cands:
             mask, (ci, cx) = c["mask"], c["crest"]
-            ring = _ring(mask, max(3, np.sqrt(c["cells"]) / 4))
+            ring = _ring(mask, max(3, np.sqrt(c["cells"]) / 4)) & live
             lid = f"L{len(leads) + 1}"
             loc = where(ci, cx, c["crest_ms"], name)
             # best reservoir zone inside this layer
             if "sand" in win:
                 sj = [float(s["sand"][mask].mean()) for s in slabs]
             else:
-                sj = [float(s["full"][mask].mean() / (s["full"].mean() + eps)) for s in slabs]
+                sj = [float(s["full"][mask].mean() / (s["full"][live].mean() + eps)) for s in slabs]
             j = int(np.argmax(sj))
             sl = slabs[j]
             zone = f"{off[j][0]:.0f}-{off[j][1]:.0f} ms below {name}"
@@ -325,12 +346,23 @@ def build(grid, seis, vols, horizons, fl, semb, facies, wells, log=print, window
                     lead["against"].append(ev(f"{lid}: the body continues up-dip, so there is no obvious up-dip seal.", zloc, "risk"))
             # --- reservoir
             if "sand" in win:
-                s_in, s_bg = sj[j], float(sl["sand"].mean())
+                s_in, s_bg = sj[j], float(sl["sand"][live].mean())
                 mt["sand_prob_in"], mt["sand_prob_survey_avg"] = round(s_in, 3), round(s_bg, 3)
                 res = float(np.clip((s_in - 0.25) / 0.45, 0, 1))
                 (lead["for"] if s_in >= 0.45 else lead["against"]).append(ev(
                     f"{lid}: the sandiest zone under the lead is {zone}: sand probability {s_in:.2f} inside the lead "
                     f"(same zone across the survey {s_bg:.2f}).", dict(zloc, vol="sand"), "reservoir"))
+                if calib:                                   # the same number, as checked against the wells
+                    vals = {"sand": s_in}
+                    for role in ("ai", "si", "vpvs"):
+                        if role in sl:
+                            vals[role] = float(sl[role][mask].mean())
+                    rc = calibrate.p_sand(calib, vals)
+                    if rc and calib.get("model", "none") != "none":
+                        mt["rock_certainty"] = rc
+                        (lead["for"] if rc["rock"] == "sand" else lead["against"]).append(ev(
+                            f"{lid}: checked against the wells, that zone is {rc['rock']} with certainty {rc['certainty']:.2f} "
+                            f"({rc['basis']}).", dict(zloc, vol="sand"), "rock"))
             else:
                 res = 0.4
                 lead["unknown"].append(ev(f"{lid}: no sand-probability volume loaded, reservoir presence is not assessed.", loc, "risk"))
@@ -353,7 +385,7 @@ def build(grid, seis, vols, horizons, fl, semb, facies, wells, log=print, window
             dhi = []
             for role, word in (("ai", "P-impedance"), ("vpvs", "Vp/Vs")):
                 if role in sl:
-                    zval = _zscore_in(sl[role], mask)
+                    zval = _zscore_in(sl[role], mask, live)
                     mt[f"{role}_zscore"] = round(zval, 2)
                     dhi.append(float(np.clip(-zval / 1.5, 0, 1)))
                     if zval < -0.5:
@@ -365,7 +397,7 @@ def build(grid, seis, vols, horizons, fl, semb, facies, wells, log=print, window
                                                   f"not what hydrocarbon sand usually shows.", dict(zloc, vol=role), "dhi"))
             if "near" in sl and "far" in sl:
                 fn = sl["far"] / (sl["near"] + eps)
-                r_in, r_bg = float(np.median(fn[mask])), float(np.median(fn))
+                r_in, r_bg = float(np.median(fn[mask])), float(np.median(fn[live]))
                 mt["far_over_near_in"], mt["far_over_near_survey"] = round(r_in, 2), round(r_bg, 2)
                 rel = r_in / (r_bg + eps)
                 dhi.append(float(np.clip((rel - 0.9) / 0.6, 0, 1)))
@@ -426,14 +458,16 @@ def build(grid, seis, vols, horizons, fl, semb, facies, wells, log=print, window
         hz_info.append({
             "name": name, "polarity": hz["polarity"],
             "layer_below": f"{name} to {nxt}" if nxt else f"{name} and {3 * int(window_ms)} ms below",
-            "twt_min_ms": round(float(m["time"].min()), 1),
-            "twt_max_ms": round(float(m["time"].max()), 1), "twt_mean_ms": round(float(m["time"].mean()), 1),
-            "shallowest_at": where(*np.unravel_index(np.argmin(z_ms), z_ms.shape), float(z_ms.min()), name),
-            "deepest_at": where(*np.unravel_index(np.argmax(z_ms), z_ms.shape), float(z_ms.max()), name),
+            "twt_min_ms": round(float(m["time"][live].min()), 1),
+            "twt_max_ms": round(float(m["time"][live].max()), 1), "twt_mean_ms": round(float(m["time"][live].mean()), 1),
+            "shallowest_at": where(*np.unravel_index(np.argmin(np.where(live, z_ms, np.inf)), z_ms.shape),
+                                   float(z_ms[live].min()), name),
+            "deepest_at": where(*np.unravel_index(np.argmax(np.where(live, z_ms, -np.inf)), z_ms.shape),
+                                float(z_ms[live].max()), name),
             "dip_direction": _dip_dir(z_ms, grid),
             "faults": {"count": len(segs), "trends": faults_mod.strike_summary(segs), "largest": segs[:5]},
             "closures": sum(1 for c in cands if c["kind"] != "stratigraphic body"),
-            "sand_prob_layer_avg": round(float(whole["sand"].mean()), 3) if "sand" in whole else None,
+            "sand_prob_layer_avg": round(float(whole["sand"][live].mean()), 3) if "sand" in whole else None,
             "wells": [{"well": r["well"], "twt": r["twt"], "logs_layer": r["logs"], "seismic_layer": r["seismic"]} for r in hits_here],
         })
         for k, v in m.items():
@@ -497,13 +531,13 @@ def build(grid, seis, vols, horizons, fl, semb, facies, wells, log=print, window
             l[k] = [idmap[x] for x in l[k]]
 
     # ---------------- well calibration of the seismic properties
-    calib = _calibration(well_hits)
-    fac = _facies_table(facies, seis, semb, vols, grid) if facies is not None else []
+    checks = _calibration(well_hits)
+    fac = _facies_table(facies, seis, semb, vols, grid, live, calib) if facies is not None else []
     wells_out = []
     for key, wh in well_hits.items():
         wells_out.append({"well": wh["name"], "horizons": {hn: {"twt": r["twt"], "base_twt": r["base_twt"], "logs_layer": r["logs"],
                                                                  "seismic_layer": r["seismic"]} for hn, r in wh["hz"].items()}})
-    return ({"horizons": hz_info, "leads": out_leads, "evidence": ev_out, "calibration": calib, "facies": fac,
+    return ({"horizons": hz_info, "leads": out_leads, "evidence": ev_out, "calibration": checks, "facies": fac,
              "well_ties": wells_out, "window_ms": window_ms}, maps, lead_map)
 
 
@@ -544,34 +578,106 @@ def _calibration(well_hits):
     return out
 
 
-def _facies_table(facies, seis, semb, vols, grid):
+# Standard seismic-facies vocabulary: (amplitude class, continuity class) -> (name, what it usually is).
+# The second text is a general principle, not something measured in this survey.
+_FACIES_NAMES = {
+    ("high", "high"): ("High-amplitude continuous (parallel)",
+                       "laterally extensive beds with strong contrasts: sheet sands interbedded with shale, or coal / "
+                       "carbonate stringers; quiet, widespread deposition"),
+    ("high", "mid"): ("High-amplitude semi-continuous",
+                      "beds that change sideways: channel fills, lobes or bars; often sand-prone"),
+    ("high", "low"): ("High-amplitude discontinuous",
+                      "broken bright reflections: channel complexes, or bright beds cut by many small faults"),
+    ("mid", "high"): ("Moderate-amplitude parallel",
+                      "regularly interbedded sand and shale (heterolithic), laid down evenly over a wide area"),
+    ("mid", "mid"): ("Moderate-amplitude semi-continuous",
+                     "mixed lithology with beds of variable extent"),
+    ("mid", "low"): ("Chaotic / disrupted",
+                     "disturbed bedding: fault zones, slumps and mass-transport deposits, or gas-disturbed sediment"),
+    ("low", "high"): ("Low-amplitude continuous",
+                      "uniform fine-grained section with little contrast: shale-prone, quiet-water deposits"),
+    ("low", "mid"): ("Low-amplitude / transparent",
+                     "one lithology with almost no internal contrast: massive shale, or less often massive sand"),
+    ("low", "low"): ("Low-amplitude chaotic",
+                     "structureless, weak reflections: homogenised sediment, or poor imaging (noise, steep dips)"),
+}
+
+
+def _facies_table(facies, seis, semb, vols, grid, live=None, calib=None):
+    """One row per seismic facies: measured character, a standard facies name, and what the wells found in it."""
+    from .rgt import local_slopes
     k = int(facies.max()) + 1
     sub = (slice(None, None, 2),) * 3
     f = np.asarray(facies[sub])
-    amp = np.abs(np.asarray(seis[sub]))
+    s = np.asarray(seis[sub], dtype=np.float32)
+    amp = np.abs(s)
     sm = np.asarray(semb[sub]) if semb is not None else None
+    lv2 = live[::2, ::2] if live is not None else np.ones(f.shape[:2], dtype=bool)
+    lv = np.broadcast_to(lv2[:, :, None], f.shape)
     tt = np.broadcast_to(np.asarray(grid["times"])[::2][None, None, :], f.shape)
-    g_amp = float(amp.mean()) + 1e-9
+    g_amp = float(amp[lv].mean()) + 1e-9
+    dsdt = np.abs(np.gradient(s, axis=2))
+    g_freq = float(dsdt[lv].mean()) / g_amp
+    try:
+        p, q = local_slopes(s)
+        dip = np.hypot(p, q)
+        g_dip = float(np.median(dip[lv])) + 1e-6
+    except Exception:
+        dip, g_dip = None, 1.0
+    g_cont = float(sm[lv].mean()) if sm is not None else None
+    cont_sd = float(sm[lv].std()) + 1e-6 if sm is not None else 1.0
+    wf = (calib or {}).get("facies_net_sand") or {}
     rows = []
     for c in range(k):
-        m = f == c
-        if m.sum() == 0:
+        m_all = f == c
+        if m_all.sum() == 0:
             continue
-        row = {"facies": c + 1, "share": round(float(m.mean()), 3), "amplitude_vs_avg": round(float(amp[m].mean() / g_amp), 2),
-               "typical_twt_ms": round(float(np.median(tt[m])), 0)}
+        dead_share = float((m_all & ~lv).sum() / m_all.sum())
+        m = m_all & lv
+        if dead_share > 0.5 or m.sum() == 0:
+            rows.append({"facies": c + 1, "share": round(float(m_all.mean()), 3), "no_data": True,
+                         "name": "No data (survey edge)", "reading": "empty traces outside the surveyed area",
+                         "lithology": "none", "typical_twt_ms": round(float(np.median(tt[m_all])), 0),
+                         "description": "no data (survey edge)"})
+            continue
+        a_rel = float(amp[m].mean() / g_amp)
+        row = {"facies": c + 1, "share": round(float(m.sum() / max(1, lv.sum())), 3), "amplitude_vs_avg": round(a_rel, 2),
+               "typical_twt_ms": round(float(np.median(tt[m])), 0),
+               "frequency_vs_avg": round(float(dsdt[m].mean() / (amp[m].mean() + 1e-9)) / (g_freq + 1e-9), 2)}
         if sm is not None:
             row["continuity"] = round(float(sm[m].mean()), 2)
+        if dip is not None:
+            row["dip_vs_avg"] = round(float(np.median(dip[m])) / g_dip, 2)
         for role in ("sand", "ai", "vpvs"):
             if role in vols:
                 v = np.asarray(vols[role][sub])
                 row[f"{role}_mean"] = round(float(v[m].mean()), 3)
-                row[f"{role}_vs_avg_sd"] = round(float((v[m].mean() - v.mean()) / (v.std() + 1e-9)), 2)
-        words = ["bright" if row["amplitude_vs_avg"] > 1.25 else ("dim" if row["amplitude_vs_avg"] < 0.75 else "moderate-amplitude")]
-        if sm is not None:
-            words.append("continuous" if row["continuity"] > float(sm.mean()) + 0.03 else
-                         ("broken / chaotic" if row["continuity"] < float(sm.mean()) - 0.03 else "semi-continuous"))
+                row[f"{role}_vs_avg_sd"] = round(float((v[m].mean() - v[lv].mean()) / (v[lv].std() + 1e-9)), 2)
+        a_cls = "high" if a_rel > 1.25 else ("low" if a_rel < 0.75 else "mid")
+        if sm is None:
+            c_cls = "mid"
+        else:
+            zc = (row["continuity"] - g_cont) / cont_sd
+            c_cls = "high" if zc > 0.25 else ("low" if zc < -0.25 else "mid")
+        name, reading = _FACIES_NAMES[(a_cls, c_cls)]
+        lith = "mixed lithology"
         if "sand_mean" in row:
-            words.append("sand-prone" if row["sand_vs_avg_sd"] > 0.3 else ("shale-prone" if row["sand_vs_avg_sd"] < -0.3 else "mixed lithology"))
-        row["description"] = ", ".join(words)
+            lith = "sand-prone" if row["sand_vs_avg_sd"] > 0.3 else ("shale-prone" if row["sand_vs_avg_sd"] < -0.3 else "mixed lithology")
+        w = wf.get(str(c + 1))
+        if w and w.get("intervals", 0) >= 3:
+            row["well_net_sand"], row["well_intervals"], row["well_count"] = w["net_sand"], w["intervals"], w["wells"]
+            lith = "sand-prone" if w["net_sand"] > 0.5 else ("shale-prone" if w["net_sand"] < 0.25 else "mixed lithology")
+            row["lithology_source"] = f"logs of {w['wells']} wells ({w['intervals']} intervals, net sand {w['net_sand']:.0%})"
+        elif "sand_mean" in row:
+            row["lithology_source"] = "sand-probability volume (no well goes through enough of this facies)"
+        extra = []
+        if row["frequency_vs_avg"] > 1.2:
+            extra.append("thin-bedded")
+        elif row["frequency_vs_avg"] < 0.8:
+            extra.append("thick-bedded")
+        if row.get("dip_vs_avg", 1.0) > 1.6:
+            extra.append("steeply dipping")
+        row.update({"name": name, "reading": reading, "lithology": lith, "character": extra,
+                    "description": ", ".join([name.lower(), lith] + extra)})
         rows.append(row)
     return rows
