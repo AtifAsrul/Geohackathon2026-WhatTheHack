@@ -10,7 +10,7 @@ Tip: you can copy a line here and paste it into the HPC terminal with **Ctrl + S
 
 ## Part A — Repository and prerequisites
 
-Use [AtifAsrul/exploration-copilot](https://github.com/AtifAsrul/exploration-copilot), branch `main`.
+Use [AtifAsrul/Geohackathon2026-WhatTheHack](https://github.com/AtifAsrul/Geohackathon2026-WhatTheHack), branch `main`.
 The repository contains code; challenge data, models, environments and interpretation results stay on the HPC.
 
 Before installing, check `python3 --version`, `git --version`, and `df -h .` in your writable HPC
@@ -29,7 +29,7 @@ Do not use `sudo` or change the system Python.
 
 ```
 cd /data/epic20/APGCE/$USER
-git clone https://github.com/AtifAsrul/exploration-copilot.git
+git clone https://github.com/AtifAsrul/Geohackathon2026-WhatTheHack.git exploration-copilot
 cd exploration-copilot
 bash setup.sh
 ```
@@ -47,7 +47,7 @@ If a line fails:
 | What you see | What to type instead |
 |---|---|
 | `cd: /data/epic20/APGCE/...: No such file or directory` | `ls /data/epic20/APGCE/` to see your team's folder name, then `cd /data/epic20/APGCE/that_name` |
-| `git: command not found` | `curl -L -o ec.zip https://github.com/AtifAsrul/exploration-copilot/archive/refs/heads/main.zip` then `unzip ec.zip` then `cd exploration-copilot-main` then `bash setup.sh`. This ZIP copy cannot use `git pull`; use a fresh ZIP in a separate folder for later updates. |
+| `git: command not found` | `curl -L -o ec.zip https://github.com/AtifAsrul/Geohackathon2026-WhatTheHack/archive/refs/heads/main.zip` then `unzip ec.zip` then `cd Geohackathon2026-WhatTheHack-main` then `bash setup.sh`. This ZIP copy cannot use `git pull`; use a fresh ZIP in a separate folder for later updates. |
 | GitHub cannot be reached at all | In RustDesk use the **file transfer** button to copy `exploration-copilot-v4.zip` to the HPC, then `unzip exploration-copilot-v4.zip`, `cd exploration-copilot`, `bash setup.sh` |
 
 ---
@@ -90,7 +90,8 @@ git remote get-url origin
 git status --short
 ```
 
-   The remote should be `https://github.com/AtifAsrul/exploration-copilot.git` (or its SSH equivalent).
+   The remote should be `https://github.com/AtifAsrul/Geohackathon2026-WhatTheHack.git` (or its SSH equivalent). A checkout made before the
+   repository was renamed shows the old name, `AtifAsrul/exploration-copilot`; GitHub redirects it, so pulls still work.
    If it points elsewhere, confirm you are in the intended checkout before changing anything.
    If `git status --short` lists local code edits, preserve them with `git stash push -u -m before-v4-update`.
    Ignored environments, models and workspaces remain in place. Then pull:

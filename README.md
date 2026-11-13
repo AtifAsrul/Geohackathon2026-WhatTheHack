@@ -75,7 +75,7 @@ Every heavy component has a fallback, so the app always produces a result and sa
 ## Run it
 
 ```bash
-git clone https://github.com/AtifAsrul/exploration-copilot.git
+git clone https://github.com/AtifAsrul/Geohackathon2026-WhatTheHack.git exploration-copilot
 cd exploration-copilot
 bash setup.sh     # once: environments, packages, models
 bash start.sh     # every time: then open http://127.0.0.1:8050
