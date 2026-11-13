@@ -138,6 +138,10 @@ HPC. Seismic and well data stay where they are.
 
 ## Credits and licences
 
+This repository's own code is released under the [MIT License](LICENSE). The third-party models, libraries and
+fonts below keep their own licences; the challenge data is not part of this repository.
+
+* Geist and Geist Mono fonts (`web/fonts/`) — Vercel, SIL Open Font License 1.1.
 * OpenVDS — The Open Group / Bluware. The app uses the pinned PyPI binary distribution;
   see [package licensing](https://pypi.org/project/openvds/) for the terms of that distribution.
 * Existing SDIP/MDIO stores remain readable for compatibility; SDIP is no longer installed or invoked.
