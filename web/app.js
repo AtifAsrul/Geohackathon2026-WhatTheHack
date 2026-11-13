@@ -533,7 +533,7 @@ function showProgress(s) {
   box.classList.remove("hidden"); box.classList.toggle("running", s.state === "running");
   const ids = (s.stages || []).map((q) => q.id), cur = ids.indexOf(s.stage);
   $("prog-steps").innerHTML = (s.stages || []).map((q, i) => `<span class="${s.state === "done" || i < cur ? "done" : i === cur ? (s.state === "error" ? "fail" : "now") : ""}">${s.state === "done" || i < cur ? '<i class="tick">✓</i> ' : ""}${esc(q.label)}</span>`).join("");
-  $("prog-msg").textContent = s.state === "error" ? "Stopped: " + (s.error || s.message || "") : s.state === "done" ? "Finished. You can close this bar by reloading the page." : (s.message || "");
+  $("prog-msg").textContent = s.state === "error" ? "Stopped: " + (s.error || s.message || "") : s.state === "done" ? "Finished. You can close this bar by reloading the page." : (cur >= 0 ? `Step ${cur + 1} of ${ids.length} · ` : "") + (s.message || "");
   if (say.last !== $("prog-msg").textContent) { say.last = $("prog-msg").textContent; say(say.last); }
   if (s.state === "running") pill("pill-interp", "busy", "Interpreting…"); else if (s.state === "error") pill("pill-interp", "bad", "Run stopped");
   $("btn-run").disabled = s.state === "running";

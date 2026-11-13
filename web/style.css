@@ -18,7 +18,7 @@ b, strong { font-weight: 500; }
 .linkish { color: var(--text-2); font-size: 0.75rem; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-header { display: flex; align-items: center; gap: 18px; padding: 8px 14px; background: var(--bg-deep); border-bottom: 1px solid var(--hairline); min-height: 48px; }
+header { display: flex; align-items: center; gap: 16px; padding: 8px 12px; background: var(--bg-deep); border-bottom: 1px solid var(--hairline); min-height: 48px; }
 .brand { font-size: 0.875rem; font-weight: 500; white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; }
 .brand .mark { color: var(--accent); margin-right: 0; }
 .pills { display: flex; gap: 8px; flex: 1; flex-wrap: wrap; }
@@ -26,8 +26,9 @@ header { display: flex; align-items: center; gap: 18px; padding: 8px 14px; backg
 .pill i { width: 8px; height: 8px; border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-3); display: inline-block; }
 .pill.ok i { background: var(--discovery); box-shadow: none; }
 .pill.busy i { background: var(--warn); box-shadow: none; }
-@media (prefers-reduced-motion: no-preference) { .pill.busy i { animation: pulse 1s infinite; } }
-@keyframes pulse { 50% { opacity: .35; } }
+/* busy = the same small spinning ring used on the step in progress; with reduced motion it stays a plain dot */
+@media (prefers-reduced-motion: no-preference) { .pill.busy i { width: 10px; height: 10px; background: transparent; border: 1.5px solid var(--hairline-strong); border-top-color: var(--solid); animation: spin 0.8s linear infinite; } }
+@keyframes spin { to { transform: rotate(360deg); } }
 .pill.bad i { background: var(--dry); box-shadow: none; }
 .pill.ok { color: var(--text); }
 .actions { display: flex; gap: 8px; }
@@ -37,7 +38,7 @@ button { cursor: pointer; border-radius: 8px; border: 1px solid var(--pill-edge)
   transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease), opacity 150ms var(--ease), transform 150ms ease-out; }
 button:active:not(:disabled) { transform: scale(0.97); }
 button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--solid); border-color: transparent; color: var(--solid-ink); font-weight: 500; min-height: var(--control); padding: 0 14px; border-radius: var(--r-m); }
+button.primary { background: var(--solid); border-color: transparent; color: var(--solid-ink); font-weight: 500; min-height: var(--control); padding: 4px 12px; }
 button.primary:active:not(:disabled) { transform: scale(0.96); }
 button.ghost { background: var(--pill); }
 button.small { padding: 4px 12px; font-size: 0.8125rem; }
@@ -48,14 +49,22 @@ button.mini { padding: 0; min-width: 32px; height: 32px; display: inline-flex; a
 }
 
 /* theme switch: a half-filled circle, 36px, like the guide's icon button */
-button.icon-btn { width: var(--control); height: var(--control); padding: 0; border-color: transparent; background: var(--surface); color: var(--text); border-radius: var(--r-m); display: inline-flex; align-items: center; justify-content: center; }
+button.icon-btn { width: var(--control); height: var(--control); padding: 0; border-color: transparent; background: var(--surface); color: var(--text); display: inline-flex; align-items: center; justify-content: center; }
 @media (hover: hover) { button.icon-btn:hover:not(:disabled) { background: var(--raised); border-color: transparent; } }
 html.no-transitions *, html.no-transitions *::before, html.no-transitions *::after { transition: none !important; }
 
-#progress { background: var(--bg); border-bottom: 1px solid var(--hairline); padding: 8px 14px; position: relative; }
+#progress { background: var(--bg); border-bottom: 1px solid var(--hairline); padding: 8px 12px; position: relative; }
 /* while a run is going: the brand gradient as one thin line along the bottom of the bar */
-#progress.running::after { content: ""; position: absolute; inset-inline: 0; bottom: -1px; height: 2px; background: var(--brand-gradient); }
-.prog-steps { display: flex; gap: 6px; flex-wrap: wrap; }
+#progress.running::after { content: ""; position: absolute; inset-inline: 0; bottom: 0; height: 2px; background: var(--brand-gradient); }
+/* with motion allowed, that line becomes one soft orange segment sliding along the bar, and the step in progress gets a ring */
+@media (prefers-reduced-motion: no-preference) {
+  #progress.running { overflow: hidden; }
+  #progress.running::after { inset-inline: 0 auto; width: 36%; background: linear-gradient(90deg, transparent, var(--solid), transparent); animation: sweep 1.6s var(--ease) infinite; }
+  .prog-steps span.now { display: inline-flex; align-items: center; gap: 6px; }
+  .prog-steps span.now::before { content: ""; flex: none; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--pill-on-edge); border-top-color: var(--solid); animation: spin 0.8s linear infinite; }
+}
+@keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(280%); } }
+.prog-steps { display: flex; gap: 4px; flex-wrap: wrap; }
 .prog-steps span { font-size: 0.75rem; padding: 2px 10px; border-radius: 8px; border: 1px solid var(--pill-edge); background: var(--pill); color: var(--text-3); }
 .prog-steps span.done { color: var(--text-2); }
 .prog-steps .tick { font-style: normal; color: var(--discovery); }
@@ -84,7 +93,7 @@ main.no-chat #viewer { border-right: 0; }
 body.resizing, body.resizing * { cursor: col-resize !important; user-select: none; }
 @media (max-width: 1100px) { .grip { display: none; } }
 
-.toolbar { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-bottom: 1px solid var(--hairline); flex-wrap: wrap; }
+.toolbar { display: flex; align-items: center; gap: 8px 12px; padding: 8px 12px; border-bottom: 1px solid var(--hairline); flex-wrap: wrap; }
 .toolbar label { color: var(--text-3); font-size: 0.75rem; display: inline-flex; align-items: center; gap: 6px; }
 select, input[type=number], input[type=text], textarea { background: var(--raised); border: 1px solid var(--pill-edge); border-radius: 8px; padding: 4px 8px; min-height: 32px; color: var(--text);
   transition: border-color 150ms var(--ease); }
@@ -109,26 +118,28 @@ textarea::placeholder, input::placeholder { color: var(--text-3); }
 .panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 #p-section { flex: 1.45; border-right: 1px solid var(--hairline); }
 #p-map { flex: 1; }
-.phead { display: flex; align-items: center; gap: 10px; padding: 8px 10px; flex-wrap: wrap; }
+.phead { display: flex; align-items: center; gap: 8px; padding: 8px 12px; flex-wrap: wrap; }
 /* tab rows: separate pills with a 4px gap; the selected one is the orange pill */
 .tabs { display: inline-flex; gap: 4px; }
-.tabs button { padding: 4px 12px; color: var(--text-2); }
+.tabs button { padding: 4px 12px; color: var(--text-2); white-space: nowrap; }
 /* small tab groups and the panel toggles sit in one grey track; the chosen one is the orange pill */
 .tabs:not(.big), .view-toggles { gap: 2px; padding: 2px; background: var(--pill); border-radius: var(--r-m); }
 .tabs:not(.big) button, .view-toggles button { min-height: 28px; background: transparent; border-color: transparent; }
 .view-toggles { display: inline-flex; }
-.view-toggles button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; color: var(--text-2); }
+.view-toggles button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 32px; padding: 4px 12px; color: var(--text-2); }
 .view-toggles button svg { flex: none; }
 .view-toggles button[aria-pressed="true"] { background: var(--pill-on); border-color: var(--pill-on-edge); color: var(--pill-on-ink); }
 @media (hover: hover) { .tabs:not(.big) button:not(.on):hover:not(:disabled), .view-toggles button[aria-pressed="false"]:hover:not(:disabled) { background: var(--pill-hover); } }
 @media (hover: hover) { .view-toggles button[aria-pressed="true"]:hover:not(:disabled) { background: var(--pill-on-hover); border-color: var(--pill-on-edge); } }
-@media (max-width: 1280px) { .view-toggles button span { display: none; } .view-toggles button { padding: 4px 8px; } }
+@media (max-width: 1280px) { .view-toggles button span { display: none; } .view-toggles button { padding: 0; width: 32px; } }
 .tabs button.on { background: var(--pill-on); border-color: var(--pill-on-edge); color: var(--pill-on-ink); }
 @media (hover: hover) { .tabs button.on:hover { background: var(--pill-on-hover); border-color: var(--pill-on-edge); } }
 .tabs.big { display: flex; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--hairline); align-items: center; }
-.tabs.big button[data-side] { flex: 1; font-size: 0.8125rem; }
+.tabs.big button[data-side] { flex: 1 1 auto; min-width: 0; padding: 4px 8px; font-size: 0.8125rem; overflow: hidden; text-overflow: ellipsis; }
 .tablist-inner { display: contents; }
-.tabs.big .side-close { flex: none; background: transparent; border-color: transparent; }
+.tabs.big .side-close svg { flex: none; }
+.tabs.big .side-close { flex: none; width: 32px; padding: 0; margin-inline-start: 4px; background: var(--pill); border-color: var(--hairline-strong); color: var(--text); }
+@media (hover: hover) { .tabs.big .side-close:hover { background: var(--pill-hover); border-color: var(--text-2); } }
 .stepper { display: inline-flex; align-items: center; gap: 4px; }
 .stepper input[type=number] { width: 78px; text-align: end; }
 .stepper select { max-width: 150px; }
@@ -188,8 +199,8 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crossh
 #suggest button:not(:first-child) { display: none; }
 #suggest button:hover, #suggest button:focus-visible { opacity: 1; color: var(--text); }
 #chat-form { padding: 12px 16px 16px; border-top: 1px solid var(--hairline); display: flex; flex-direction: column; gap: 8px; }
-#chat-input { width: 100%; resize: none; padding: 8px 12px; border-radius: var(--r-m); line-height: 1.43; }
-button.primary.send { width: var(--control); height: var(--control); padding: 0; border-radius: var(--r-s); display: inline-flex; align-items: center; justify-content: center; }
+#chat-input { width: 100%; resize: none; padding: 8px 12px; line-height: 1.43; }
+button.primary.send { width: var(--control); height: var(--control); padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .navhelp { position: relative; flex: none; }
 .navhelp summary { list-style: none; padding: 6px 4px; }
 .navhelp summary::-webkit-details-marker { display: none; }
